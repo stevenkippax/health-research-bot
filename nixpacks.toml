@@ -1,9 +1,6 @@
-# Tell Nixpacks this is a Python project in a subdirectory
+# Railway/Nixpacks configuration
 [phases.setup]
 nixPkgs = ["python311", "gcc"]
 
-[phases.install]
-cmds = ["cd viral_bot && pip install -r requirements.txt"]
-
 [start]
-cmd = "cd viral_bot && python -m viral_bot serve --with-scheduler"
+cmd = "python app.py"
