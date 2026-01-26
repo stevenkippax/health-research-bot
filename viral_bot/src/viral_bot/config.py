@@ -94,11 +94,18 @@ class Settings(BaseSettings):
         """Get the effective database URL (PostgreSQL or SQLite)."""
         if self.database_url:
             return self.database_url
-        
-        # Ensure directory exists for SQLite
+
+        # For SQLite, try to ensure directory exists
+        # On Railway/cloud platforms with read-only filesystem, this may fail
+        # In that case, use /tmp or require DATABASE_URL to be set
         db_path = Path(self.database_path)
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+        try:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Fall back to /tmp for cloud environments with read-only filesystems
+            db_path = Path("/tmp") / db_path.name
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+
         return f"sqlite:///{db_path.absolute()}"
     
     @property

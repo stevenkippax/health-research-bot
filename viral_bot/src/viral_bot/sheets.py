@@ -48,25 +48,59 @@ class SheetsExporter:
     """
     Exports post ideas to Google Sheets.
     """
-    
+
     def __init__(self):
         """Initialize with Google credentials."""
         settings = get_settings()
-        
-        # Get credentials from settings
-        creds_dict = settings.google_credentials_dict
-        
-        self.credentials = Credentials.from_service_account_info(
-            creds_dict,
-            scopes=SCOPES,
-        )
-        
+
+        # Get credentials from settings with error handling
+        try:
+            creds_dict = settings.google_credentials_dict
+        except json.JSONDecodeError as e:
+            logger.error(
+                "google_credentials_invalid_json",
+                error=str(e),
+                hint="Check GOOGLE_SERVICE_ACCOUNT_JSON is valid JSON",
+            )
+            raise ValueError(
+                "GOOGLE_SERVICE_ACCOUNT_JSON contains invalid JSON. "
+                "Make sure you copied the entire service account JSON file contents."
+            ) from e
+        except Exception as e:
+            logger.error("google_credentials_error", error=str(e))
+            raise ValueError(
+                f"Failed to parse Google credentials: {e}. "
+                "Check GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SERVICE_ACCOUNT_BASE64 settings."
+            ) from e
+
+        try:
+            self.credentials = Credentials.from_service_account_info(
+                creds_dict,
+                scopes=SCOPES,
+            )
+        except Exception as e:
+            logger.error(
+                "google_credentials_invalid",
+                error=str(e),
+                hint="Service account JSON may be malformed or missing required fields",
+            )
+            raise ValueError(
+                f"Invalid Google service account credentials: {e}. "
+                "Ensure you're using a valid service account JSON from Google Cloud Console."
+            ) from e
+
         self.sheet_id = settings.google_sheet_id
         self.tab_name = settings.google_sheet_tab_name
-        
+
         # Initialize gspread client
-        self.client = gspread.authorize(self.credentials)
-        
+        try:
+            self.client = gspread.authorize(self.credentials)
+        except Exception as e:
+            logger.error("gspread_auth_failed", error=str(e))
+            raise ValueError(
+                f"Failed to authorize with Google Sheets API: {e}"
+            ) from e
+
         logger.info(
             "sheets_exporter_initialized",
             sheet_id=self.sheet_id[:20] + "...",
