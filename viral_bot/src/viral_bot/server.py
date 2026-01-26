@@ -259,24 +259,27 @@ def run_server(
 ):
     """
     Run the FastAPI server.
-    
+
     Args:
         host: Host to bind to
         port: Port to bind to (defaults to settings.port)
         with_scheduler: Whether to enable the scheduler
     """
+    import os
     import uvicorn
-    
+
     settings = get_settings()
-    
+
     if with_scheduler:
-        # Override setting to enable scheduler
-        settings.enable_scheduler = True
-    
+        # Set environment variable instead of mutating cached settings
+        os.environ["ENABLE_SCHEDULER"] = "true"
+        # Clear the settings cache so it picks up the new value
+        get_settings.cache_clear()
+
     port = port or settings.port
-    
+
     logger.info("starting_server", host=host, port=port)
-    
+
     uvicorn.run(
         app,
         host=host,
