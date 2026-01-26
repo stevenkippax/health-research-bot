@@ -1,9 +1,6 @@
-# Railway/Nixpacks/Railpack configuration
-[phases.setup]
-nixPkgs = ["python311", "gcc"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
+# Railway/Nixpacks configuration
+# Let Nixpacks auto-detect Python and set up pip/venv automatically
+# Only override the start command
 
 [start]
 cmd = "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"
