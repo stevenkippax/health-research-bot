@@ -86,18 +86,18 @@ class SourceRegistry:
             priority=1,
         ))
         
-        # NIH News
+        # NIH News (Research Matters)
         self.sources.append(RSSSource(
             name="NIH News",
-            url="https://www.nih.gov/news-events/news-releases/feed",
+            url="https://www.nih.gov/news-events/nih-research-matters/rss.xml",
             priority=1,
             title_keywords=["aging", "health", "study", "research", "disease"],
         ))
-        
-        # NIA (National Institute on Aging)
+
+        # NIA (National Institute on Aging) - Blog feed
         self.sources.append(RSSSource(
             name="NIA News",
-            url="https://www.nia.nih.gov/newsroom/rss.xml",
+            url="https://www.nia.nih.gov/news/rss.xml",
             priority=1,
         ))
         
@@ -119,13 +119,12 @@ class SourceRegistry:
             priority=1,
         ))
         
-        # Reuters Health (via Science section)
+        # Reuters Health (via Science section) - fixed URL without www
         self.sources.append(RSSSource(
             name="Reuters Science",
-            url="https://www.reutersagency.com/feed/?best-topics=science&post_type=best",
+            url="https://reutersagency.com/feed/?best-topics=science&post_type=best",
             priority=1,
             title_keywords=["health", "study", "disease", "aging", "diet", "exercise"],
-            enabled=True,  # May need to verify this feed works
         ))
         
         # STAT News (if RSS available)
@@ -136,12 +135,12 @@ class SourceRegistry:
             title_keywords=["aging", "longevity", "health", "study", "disease"],
         ))
         
-        # Medical News Today
-        self.sources.append(RSSSource(
-            name="Medical News Today",
-            url="https://www.medicalnewstoday.com/rss/health-news.xml",
-            priority=2,
-        ))
+        # Medical News Today - disabled, blocks automated requests
+        # self.sources.append(RSSSource(
+        #     name="Medical News Today",
+        #     url="https://www.medicalnewstoday.com/rss/health-news.xml",
+        #     priority=2,
+        # ))
         
         # Science Daily - Health
         self.sources.append(RSSSource(
@@ -150,7 +149,48 @@ class SourceRegistry:
             priority=2,
             title_keywords=["aging", "longevity", "brain", "heart", "exercise", "diet"],
         ))
-        
+
+        # ==================
+        # LONGEVITY SOURCES
+        # ==================
+
+        # Lifespan.io - Longevity news and research
+        self.sources.append(RSSSource(
+            name="Lifespan.io",
+            url="https://www.lifespan.io/feed/",
+            priority=3,
+        ))
+
+        # Fight Aging! - Longevity research news
+        self.sources.append(RSSSource(
+            name="Fight Aging!",
+            url="https://www.fightaging.org/feed/",
+            priority=3,
+        ))
+
+        # Longevity Technology - Industry news
+        self.sources.append(RSSSource(
+            name="Longevity Technology",
+            url="https://longevity.technology/feed/",
+            priority=2,
+        ))
+
+        # Harvard Health Blog
+        self.sources.append(RSSSource(
+            name="Harvard Health",
+            url="https://www.health.harvard.edu/blog/feed",
+            priority=2,
+            title_keywords=["aging", "longevity", "brain", "heart", "exercise", "diet", "study"],
+        ))
+
+        # EurekAlert Health/Medicine
+        self.sources.append(RSSSource(
+            name="EurekAlert Health",
+            url="https://www.eurekalert.org/rss/medicine_health.xml",
+            priority=2,
+            title_keywords=["aging", "longevity", "lifespan", "cognitive", "disease"],
+        ))
+
         logger.info("source_registry_initialized", total_sources=len(self.sources))
     
     def add_source(self, source: ContentSource) -> None:
