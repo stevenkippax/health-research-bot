@@ -1,0 +1,46 @@
+# Core
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# HTTP & Feeds
+httpx>=0.25.0
+feedparser>=6.0.10
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# OpenAI
+openai>=1.6.0
+
+# Google Sheets
+google-auth>=2.25.0
+google-api-python-client>=2.111.0
+gspread>=5.12.0
+
+# Database
+sqlalchemy>=2.0.23
+alembic>=1.13.0
+psycopg2-binary>=2.9.9  # For PostgreSQL (optional)
+
+# Embeddings for semantic deduplication
+numpy>=1.26.0
+
+# Retry logic
+tenacity>=8.2.3
+
+# Scheduling
+apscheduler>=3.10.4
+
+# Web server (health endpoints)
+fastapi>=0.108.0
+uvicorn>=0.25.0
+
+# CLI
+click>=8.1.7
+rich>=13.7.0
+
+# Date handling
+python-dateutil>=2.8.2
+
+# Logging
+structlog>=23.2.0

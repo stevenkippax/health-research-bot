@@ -1,0 +1,8 @@
+# Main worker process (runs the bot with built-in scheduler)
+worker: python -m viral_bot serve --with-scheduler
+
+# Alternative: Just the health server (use Railway cron for scheduling)
+web: python -m viral_bot serve
+
+# One-off run (for Railway cron jobs)
+# Schedule this with: railway cron "0 9,18 * * *" -- python -m viral_bot run
