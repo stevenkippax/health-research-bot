@@ -3,6 +3,9 @@ Source registry - central configuration of all content sources.
 
 This module defines all the sources the bot fetches from and
 provides methods to run fetches across all sources.
+
+Includes research, public health/policy, and news sources for
+balanced content mix.
 """
 
 import asyncio
@@ -21,22 +24,22 @@ logger = get_logger(__name__)
 class SourceRegistry:
     """
     Central registry of all content sources.
-    
+
     Manages source configuration and coordinated fetching.
     """
-    
+
     def __init__(self):
         """Initialize registry with default sources."""
         self.sources: list[ContentSource] = []
         self._setup_default_sources()
-    
+
     def _setup_default_sources(self) -> None:
         """Configure all default sources."""
-        
+
         # ==================
         # RESEARCH SOURCES
         # ==================
-        
+
         # bioRxiv - Neuroscience, Aging, Physiology
         self.sources.append(RSSSource(
             name="bioRxiv Neuroscience",
@@ -44,14 +47,14 @@ class SourceRegistry:
             priority=2,
             title_keywords=["aging", "age", "cognitive", "brain", "memory", "neuro"],
         ))
-        
+
         self.sources.append(RSSSource(
             name="bioRxiv Physiology",
             url="https://connect.biorxiv.org/biorxiv_xml.php?subject=physiology",
             priority=2,
             title_keywords=["aging", "longevity", "lifespan", "metabol", "exercise"],
         ))
-        
+
         # medRxiv - Public health, Epidemiology
         self.sources.append(RSSSource(
             name="medRxiv",
@@ -59,33 +62,33 @@ class SourceRegistry:
             priority=2,
             title_keywords=["aging", "mortality", "longevity", "health", "chronic"],
         ))
-        
+
         # PubMed API
         self.sources.append(PubMedSource(
             name="PubMed",
             priority=3,
             max_results_per_query=15,
         ))
-        
+
         # ==================
-        # PUBLIC HEALTH SOURCES
+        # PUBLIC HEALTH / POLICY SOURCES (EXPANDED)
         # ==================
-        
-        # WHO News
+
+        # WHO News - World Health Organization
         self.sources.append(RSSSource(
             name="WHO News",
             url="https://www.who.int/rss-feeds/news-english.xml",
             priority=1,
-            title_keywords=["health", "disease", "chronic", "aging", "prevention"],
+            title_keywords=["health", "disease", "chronic", "aging", "prevention", "guideline"],
         ))
-        
+
         # CDC Newsroom
         self.sources.append(RSSSource(
             name="CDC Newsroom",
             url="https://tools.cdc.gov/podcasts/feed.asp?feedid=183",
             priority=1,
         ))
-        
+
         # NIH News (Research Matters)
         self.sources.append(RSSSource(
             name="NIH News",
@@ -100,54 +103,95 @@ class SourceRegistry:
             url="https://www.nia.nih.gov/news/rss.xml",
             priority=1,
         ))
-        
+
+        # FDA News (NEW)
+        self.sources.append(RSSSource(
+            name="FDA News",
+            url="https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/fda-news-releases/rss.xml",
+            priority=1,
+            title_keywords=["health", "drug", "approval", "warning", "guidance"],
+        ))
+
+        # European Medicines Agency (NEW)
+        self.sources.append(RSSSource(
+            name="EMA News",
+            url="https://www.ema.europa.eu/en/rss/news.xml",
+            priority=1,
+            title_keywords=["health", "medicine", "approval", "safety"],
+        ))
+
+        # UK Government Health (NEW)
+        self.sources.append(RSSSource(
+            name="UK Gov Health",
+            url="https://www.gov.uk/government/organisations/department-of-health-and-social-care.atom",
+            priority=1,
+            title_keywords=["health", "NHS", "policy", "guideline", "public health"],
+        ))
+
         # ==================
-        # NEWS SOURCES
+        # NEWS SOURCES (EXPANDED)
         # ==================
-        
+
         # BBC Health (RSS)
         self.sources.append(RSSSource(
             name="BBC Health",
             url="https://feeds.bbci.co.uk/news/health/rss.xml",
             priority=1,
         ))
-        
+
         # Guardian Health
         self.sources.append(RSSSource(
             name="Guardian Health",
             url="https://www.theguardian.com/society/health/rss",
             priority=1,
         ))
-        
-        # Reuters Health (via Science section) - fixed URL without www
+
+        # Reuters Health (via Science section)
         self.sources.append(RSSSource(
             name="Reuters Science",
             url="https://reutersagency.com/feed/?best-topics=science&post_type=best",
             priority=1,
             title_keywords=["health", "study", "disease", "aging", "diet", "exercise"],
         ))
-        
-        # STAT News (if RSS available)
+
+        # STAT News
         self.sources.append(RSSSource(
             name="STAT News",
             url="https://www.statnews.com/feed/",
             priority=1,
-            title_keywords=["aging", "longevity", "health", "study", "disease"],
+            title_keywords=["aging", "longevity", "health", "study", "disease", "trial"],
         ))
-        
-        # Medical News Today - disabled, blocks automated requests
-        # self.sources.append(RSSSource(
-        #     name="Medical News Today",
-        #     url="https://www.medicalnewstoday.com/rss/health-news.xml",
-        #     priority=2,
-        # ))
-        
+
+        # NPR Health (NEW)
+        self.sources.append(RSSSource(
+            name="NPR Health",
+            url="https://feeds.npr.org/1027/rss.xml",
+            priority=1,
+            title_keywords=["health", "study", "disease", "aging", "research"],
+        ))
+
+        # New York Times Health (NEW)
+        self.sources.append(RSSSource(
+            name="NYT Health",
+            url="https://rss.nytimes.com/services/xml/rss/nyt/Health.xml",
+            priority=1,
+            title_keywords=["health", "study", "aging", "disease", "research", "diet"],
+        ))
+
         # Science Daily - Health
         self.sources.append(RSSSource(
             name="ScienceDaily Health",
             url="https://www.sciencedaily.com/rss/health_medicine.xml",
             priority=2,
             title_keywords=["aging", "longevity", "brain", "heart", "exercise", "diet"],
+        ))
+
+        # Medical Xpress (NEW)
+        self.sources.append(RSSSource(
+            name="Medical Xpress",
+            url="https://medicalxpress.com/rss-feed/",
+            priority=2,
+            title_keywords=["aging", "longevity", "study", "health", "disease", "research"],
         ))
 
         # ==================
@@ -191,13 +235,26 @@ class SourceRegistry:
             title_keywords=["aging", "longevity", "lifespan", "cognitive", "disease"],
         ))
 
+        # ==================
+        # SPAIN/EU HEALTH NEWS (NEW)
+        # ==================
+
+        # EU Health Policy Platform (NEW)
+        self.sources.append(RSSSource(
+            name="EU Public Health",
+            url="https://health.ec.europa.eu/latest-updates_en?f%5B0%5D=oe_content_content_type%3Aoe_news",
+            priority=1,
+            title_keywords=["health", "policy", "EU", "guideline"],
+            enabled=False,  # May need custom parsing, disabled by default
+        ))
+
         logger.info("source_registry_initialized", total_sources=len(self.sources))
-    
+
     def add_source(self, source: ContentSource) -> None:
         """Add a custom source to the registry."""
         self.sources.append(source)
         logger.info("source_added", name=source.name)
-    
+
     def remove_source(self, name: str) -> bool:
         """Remove a source by name."""
         for i, source in enumerate(self.sources):
@@ -206,20 +263,20 @@ class SourceRegistry:
                 logger.info("source_removed", name=name)
                 return True
         return False
-    
+
     def get_source(self, name: str) -> Optional[ContentSource]:
         """Get a source by name."""
         for source in self.sources:
             if source.name == name:
                 return source
         return None
-    
+
     def list_sources(self, enabled_only: bool = True) -> list[ContentSource]:
         """List all sources."""
         if enabled_only:
             return [s for s in self.sources if s.enabled]
         return self.sources
-    
+
     async def fetch_all(
         self,
         freshness_hours: int = 48,
@@ -227,31 +284,31 @@ class SourceRegistry:
     ) -> list[FetchedItem]:
         """
         Fetch from all enabled sources concurrently.
-        
+
         Args:
             freshness_hours: Only return items from last N hours
             max_concurrent: Max concurrent fetch operations
-        
+
         Returns:
             List of all fetched items
         """
         enabled_sources = [s for s in self.sources if s.enabled]
-        
+
         # Sort by priority (higher first)
         enabled_sources.sort(key=lambda s: s.priority, reverse=True)
-        
+
         logger.info(
             "starting_fetch_all",
             total_sources=len(enabled_sources),
             freshness_hours=freshness_hours,
         )
-        
+
         all_items: list[FetchedItem] = []
         errors: list[tuple[str, str]] = []
-        
+
         # Use semaphore for concurrency control
         semaphore = asyncio.Semaphore(max_concurrent)
-        
+
         async def fetch_with_semaphore(source: ContentSource) -> list[FetchedItem]:
             async with semaphore:
                 try:
@@ -270,37 +327,57 @@ class SourceRegistry:
                     )
                     errors.append((source.name, str(e)))
                     return []
-        
+
         # Fetch from all sources concurrently
         tasks = [fetch_with_semaphore(s) for s in enabled_sources]
         results = await asyncio.gather(*tasks)
-        
+
         # Combine results
         for items in results:
             all_items.extend(items)
-        
+
         logger.info(
             "fetch_all_complete",
             total_items=len(all_items),
             sources_succeeded=len(enabled_sources) - len(errors),
             sources_failed=len(errors),
         )
-        
+
         return all_items
-    
+
     def get_stats(self) -> dict:
         """Get registry statistics."""
         enabled = [s for s in self.sources if s.enabled]
-        
+
         by_type = {}
         for source in self.sources:
             type_name = type(source).__name__
             by_type[type_name] = by_type.get(type_name, 0) + 1
-        
+
+        # Count by category
+        by_category = {
+            "research": 0,
+            "policy": 0,
+            "news": 0,
+            "longevity": 0,
+        }
+
+        for source in self.sources:
+            name_lower = source.name.lower()
+            if any(kw in name_lower for kw in ["pubmed", "biorxiv", "medrxiv"]):
+                by_category["research"] += 1
+            elif any(kw in name_lower for kw in ["who", "cdc", "nih", "nia", "fda", "ema", "gov"]):
+                by_category["policy"] += 1
+            elif any(kw in name_lower for kw in ["lifespan", "fight aging", "longevity"]):
+                by_category["longevity"] += 1
+            else:
+                by_category["news"] += 1
+
         return {
             "total_sources": len(self.sources),
             "enabled_sources": len(enabled),
             "by_type": by_type,
+            "by_category": by_category,
         }
 
 
