@@ -10,6 +10,7 @@ Usage:
     python -m viral_bot export_csv       # Export outputs to CSV
     python -m viral_bot stats            # Show database statistics
     python -m viral_bot config           # Show current configuration
+    python -m viral_bot sources          # List configured sources with tiers
 """
 
 import asyncio
@@ -37,7 +38,7 @@ logger = get_logger(__name__)
 @click.group()
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 def cli(debug: bool):
-    """Viral Health Post Idea Bot CLI."""
+    """Viral Health Post Idea Bot CLI - Story Compression Pipeline."""
     level = "DEBUG" if debug else get_settings().log_level
     setup_logging(level=level)
 
@@ -50,15 +51,25 @@ def run(freshness: int, max_outputs: int, dry_run: bool):
     """
     Run the bot once (fetch, evaluate, generate, export).
 
+    Story Compression Pipeline:
+    1. Fetch from tiered sources (A/B/C credibility)
+    2. Pre-AI generic filter
+    3. Narrative spine extraction (AI Stage #1)
+    4. Quality gate (clarity score, emotional hook)
+    5. Story compression (AI Stage #2)
+    6. Headline quality gate
+    7. Novelty + Diversity enforcement
+    8. Export to Sheets
+
     Examples:
       python -m viral_bot run
       python -m viral_bot run --dry-run
       python -m viral_bot run -f 24 -n 3
     """
     if dry_run:
-        console.print(Panel("[bold yellow]Starting Viral Bot Run (DRY RUN)[/bold yellow]"))
+        console.print(Panel("[bold yellow]Starting Viral Bot Run (DRY RUN)[/bold yellow]\nStory Compression Pipeline v2"))
     else:
-        console.print(Panel("[bold green]Starting Viral Bot Run[/bold green]"))
+        console.print(Panel("[bold green]Starting Viral Bot Run[/bold green]\nStory Compression Pipeline v2"))
 
     try:
         stats = asyncio.run(run_bot(
@@ -68,22 +79,23 @@ def run(freshness: int, max_outputs: int, dry_run: bool):
         ))
 
         # Display results
-        table = Table(title="Run Results")
+        table = Table(title="Run Results - Story Compression Pipeline")
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="green")
 
-        # Show key metrics
+        # Show key metrics for new pipeline
         metrics = [
             ("run_id", stats.get("run_id", "")),
             ("items_fetched", stats.get("items_fetched", 0)),
             ("items_with_content", stats.get("items_with_content", 0)),
             ("items_after_pre_filter", stats.get("items_after_pre_filter", 0)),
             ("items_after_dedup", stats.get("items_after_dedup", 0)),
-            ("items_evaluated", stats.get("items_evaluated", 0)),
-            ("items_relevant", stats.get("items_relevant", 0)),
-            ("items_after_post_filter", stats.get("items_after_post_filter", 0)),
+            ("items_with_narrative", stats.get("items_with_narrative", 0)),
+            ("items_after_narrative_gate", stats.get("items_after_narrative_gate", 0)),
+            ("items_with_headline", stats.get("items_with_headline", 0)),
+            ("items_after_headline_gate", stats.get("items_after_headline_gate", 0)),
             ("items_after_novelty", stats.get("items_after_novelty", 0)),
-            ("items_generated", stats.get("items_generated", 0)),
+            ("items_after_diversity", stats.get("items_after_diversity", 0)),
             ("items_exported", stats.get("items_exported", 0)),
         ]
 
@@ -112,16 +124,22 @@ def run(freshness: int, max_outputs: int, dry_run: bool):
 @click.option("--json-output", "-j", is_flag=True, help="Output results as JSON")
 def debug_item(url: str, json_output: bool):
     """
-    Debug the full pipeline for a single URL.
+    Debug the full story-compression pipeline for a single URL.
 
-    Shows each step of processing including content fetching,
-    pre-AI filtering, AI evaluation, and generation.
+    Shows each step of processing including:
+    1. Content fetching
+    2. Pre-AI filtering
+    3. Narrative spine extraction
+    4. Narrative quality gate
+    5. Story compression
+    6. Headline quality gate
 
     Examples:
+      python -m viral_bot debug-item https://www.sciencedaily.com/releases/...
       python -m viral_bot debug-item https://pubmed.ncbi.nlm.nih.gov/12345678/
-      python -m viral_bot debug-item https://www.bbc.com/news/health-12345 --json-output
+      python -m viral_bot debug-item URL --json-output
     """
-    console.print(Panel(f"[bold cyan]Debugging URL[/bold cyan]\n{url}"))
+    console.print(Panel(f"[bold cyan]Debugging URL (Story Compression Pipeline)[/bold cyan]\n{url}"))
 
     try:
         result = asyncio.run(debug_single_url(url))
@@ -173,7 +191,8 @@ def backfill(days: int):
         stats = asyncio.run(run_bot(freshness_hours=freshness_hours))
 
         console.print(f"Items fetched: {stats.get('items_fetched', 0)}")
-        console.print(f"Items generated: {stats.get('items_generated', 0)}")
+        console.print(f"Items with narrative: {stats.get('items_with_narrative', 0)}")
+        console.print(f"Items exported: {stats.get('items_exported', 0)}")
         console.print("[bold green]Backfill complete![/bold green]")
 
     except Exception as e:
@@ -291,29 +310,43 @@ def test_sheets():
 @cli.command()
 @click.option("--all", "show_all", is_flag=True, help="Show disabled sources too")
 def sources(show_all: bool):
-    """List configured content sources."""
+    """List configured content sources with credibility tiers."""
     from .sources import get_source_registry
+    from .sources.registry import CredibilityTier
 
     registry = get_source_registry()
 
-    table = Table(title="Content Sources")
+    table = Table(title="Content Sources by Credibility Tier")
+    table.add_column("Tier", style="yellow")
     table.add_column("Name", style="cyan")
-    table.add_column("Type", style="yellow")
-    table.add_column("Enabled", style="green")
-    table.add_column("Priority")
+    table.add_column("Type", style="magenta")
+    table.add_column("Weight", style="green")
+    table.add_column("Enabled")
 
-    sources_list = registry.list_sources(enabled_only=not show_all)
+    # Group by tier
+    for tier in [CredibilityTier.A, CredibilityTier.B, CredibilityTier.C]:
+        for config in registry.source_configs:
+            if config.tier != tier:
+                continue
+            if not show_all and not config.source.enabled:
+                continue
 
-    for source in sources_list:
-        enabled = "[green]Yes[/green]" if source.enabled else "[red]No[/red]"
-        source_type = type(source).__name__.replace("Source", "")
-        table.add_row(source.name, source_type, enabled, str(source.priority))
+            enabled = "[green]Yes[/green]" if config.source.enabled else "[red]No[/red]"
+            source_type = type(config.source).__name__.replace("Source", "")
+            tier_style = {"A": "[green]A[/green]", "B": "[yellow]B[/yellow]", "C": "[red]C[/red]"}
+            table.add_row(
+                tier_style.get(tier.value, tier.value),
+                config.source.name,
+                source_type,
+                f"{config.weight:.1f}",
+                enabled,
+            )
 
     console.print(table)
 
     stats = registry.get_stats()
     console.print(f"\nTotal: {stats['total_sources']} | Enabled: {stats['enabled_sources']}")
-    console.print(f"By category: {stats['by_category']}")
+    console.print(f"By tier: A={stats['by_tier']['A']}, B={stats['by_tier']['B']}, C={stats['by_tier']['C']}")
 
 
 @cli.command()
@@ -357,13 +390,12 @@ def config():
     """Show current configuration (excluding secrets)."""
     settings = get_settings()
 
-    console.print(Panel("[bold blue]Current Configuration[/bold blue]"))
+    console.print(Panel("[bold blue]Current Configuration - Story Compression Pipeline[/bold blue]"))
 
     # Bot settings
     console.print("\n[cyan]Bot Settings:[/cyan]")
     console.print(f"  freshness_hours:     {settings.freshness_hours}")
     console.print(f"  max_outputs_per_run: {settings.max_outputs_per_run}")
-    console.print(f"  min_virality_score:  {settings.min_virality_score}")
 
     # Anti-generic settings
     console.print("\n[cyan]Anti-Generic Settings:[/cyan]")
@@ -371,7 +403,17 @@ def config():
     console.print(f"  min_body_chars_news:   {settings.min_body_chars_news}")
     console.print(f"  min_differentiators:   {settings.min_differentiators}")
     console.print(f"  enable_pre_ai_filter:  {settings.enable_pre_ai_filter}")
-    console.print(f"  enable_post_ai_filter: {settings.enable_post_ai_filter}")
+
+    # Story compression settings
+    console.print("\n[cyan]Story Compression Settings:[/cyan]")
+    console.print(f"  min_clarity_score:       {settings.min_clarity_score}")
+    console.print(f"  require_emotional_hook:  {settings.require_emotional_hook}")
+
+    # Tier distribution
+    console.print("\n[cyan]Source Tier Distribution:[/cyan]")
+    console.print(f"  tier_a_target_ratio: {settings.tier_a_target_ratio:.0%}")
+    console.print(f"  tier_b_target_ratio: {settings.tier_b_target_ratio:.0%}")
+    console.print(f"  tier_c_target_ratio: {settings.tier_c_target_ratio:.0%}")
 
     # Novelty settings
     console.print("\n[cyan]Novelty Settings:[/cyan]")
@@ -381,10 +423,9 @@ def config():
     console.print(f"  novelty_penalty_factor:  {settings.novelty_penalty_factor}")
 
     # Mixing settings
-    console.print("\n[cyan]Mixing Settings:[/cyan]")
-    console.print(f"  max_study_stat_per_run:     {settings.max_study_stat_per_run}")
-    console.print(f"  min_non_study_stat_per_run: {settings.min_non_study_stat_per_run}")
-    console.print(f"  max_per_archetype:          {settings.max_per_archetype}")
+    console.print("\n[cyan]Diversity Settings:[/cyan]")
+    console.print(f"  max_study_stat_per_run: {settings.max_study_stat_per_run}")
+    console.print(f"  max_per_archetype:      {settings.max_per_archetype}")
 
     # OpenAI
     console.print("\n[cyan]OpenAI:[/cyan]")

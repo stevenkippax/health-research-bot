@@ -1,21 +1,33 @@
 """
-Anti-generic filtering module.
+Anti-generic filtering module for story-compressed headlines.
 
 Rejects "gym poster" content (exercise good, sleep important, eat healthy)
 unless it contains strong differentiators like specific numbers, populations,
 or surprising findings.
 
-Two-stage filtering:
+Three-stage filtering:
 1. Pre-AI gate: Cheap deterministic checks
-2. Post-AI gate: Validates AI output has required differentiators
+2. Narrative quality gate: Validates spine extraction quality
+3. Post-AI gate: Validates headline has required differentiators
+
+Quality Requirements:
+- standalone_clarity_score >= 7
+- emotional_hook != "none"
+- No admin policy sludge (budget approvals, org changes)
+- Output diversity: max 2 STUDY_STAT per run
 """
 
 import re
 from dataclasses import dataclass
 from typing import Optional
 
+from typing import TYPE_CHECKING
+
 from .logging_conf import get_logger
 from .normalize import NormalizedItem, ContentType
+
+if TYPE_CHECKING:
+    from .narrative_extractor import NarrativeSpine
 
 logger = get_logger(__name__)
 
@@ -461,3 +473,318 @@ class GenericFilter:
             f"  - Rejected (< {self.min_differentiators} differentiators): {self.stats['post_ai_rejected']}",
         ]
         return "\n".join(lines)
+
+
+# =====================================================
+# ADMIN SLUDGE DETECTION
+# =====================================================
+
+# Keywords that indicate administrative/policy sludge (boring, not health impact)
+ADMIN_SLUDGE_PATTERNS = [
+    r"budget\s+(?:approval|increase|cut|allocation)",
+    r"(?:appointed|appoints?|appointment)\s+(?:to|as|new)",
+    r"(?:resigns?|resignation|stepping\s+down)",
+    r"(?:merger|acquisition|reorganization|restructuring)",
+    r"committee\s+(?:meeting|formation|review)",
+    r"(?:board|council)\s+(?:approves?|votes?|elects?)",
+    r"funding\s+(?:round|announcement|cut)",
+    r"office\s+(?:opens?|closes?|moves?|relocat)",
+    r"partnership\s+(?:announced|signed|formed)",
+    r"strategic\s+(?:plan|initiative|review)",
+    r"(?:quarterly|annual)\s+(?:report|meeting|review)",
+    r"leadership\s+(?:change|transition|announcement)",
+    r"organizational\s+(?:change|update|news)",
+]
+
+_ADMIN_SLUDGE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in ADMIN_SLUDGE_PATTERNS]
+
+
+def is_admin_sludge(text: str) -> tuple[bool, Optional[str]]:
+    """
+    Check if text contains administrative sludge (not health impact content).
+
+    Args:
+        text: Title or body text to check
+
+    Returns:
+        Tuple of (is_sludge, matched_pattern)
+    """
+    for pattern in _ADMIN_SLUDGE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return True, match.group(0)
+    return False, None
+
+
+# =====================================================
+# NARRATIVE SPINE QUALITY GATE
+# =====================================================
+
+@dataclass
+class NarrativeQualityResult:
+    """Result of narrative spine quality check."""
+    passed: bool
+    reason: Optional[str] = None
+    clarity_score: int = 0
+    emotional_hook: str = "none"
+    has_numbers: bool = False
+    has_consequence: bool = False
+
+
+def check_narrative_quality(
+    spine: "NarrativeSpine",
+    min_clarity_score: int = 7,
+    require_emotional_hook: bool = True,
+) -> NarrativeQualityResult:
+    """
+    Check if a narrative spine meets quality requirements.
+
+    Requirements:
+    - standalone_clarity_score >= min_clarity_score (default 7)
+    - emotional_hook != "none" (if require_emotional_hook is True)
+    - Has at least one key number for STUDY_STAT archetype
+    - Has real-world consequence
+
+    Args:
+        spine: NarrativeSpine to check
+        min_clarity_score: Minimum clarity score (default 7)
+        require_emotional_hook: Whether to require emotional hook
+
+    Returns:
+        NarrativeQualityResult
+    """
+    # Check clarity score
+    if spine.standalone_clarity_score < min_clarity_score:
+        return NarrativeQualityResult(
+            passed=False,
+            reason=f"clarity_too_low: {spine.standalone_clarity_score} < {min_clarity_score}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # Check emotional hook
+    if require_emotional_hook and spine.emotional_hook == "none":
+        return NarrativeQualityResult(
+            passed=False,
+            reason="no_emotional_hook",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # Check key numbers for STUDY_STAT
+    has_numbers = len(spine.key_numbers) > 0
+    if spine.content_archetype == "STUDY_STAT" and not has_numbers:
+        return NarrativeQualityResult(
+            passed=False,
+            reason="study_stat_without_numbers",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+            has_numbers=False,
+        )
+
+    # Check real-world consequence
+    has_consequence = bool(spine.real_world_consequence and len(spine.real_world_consequence) >= 10)
+    if not has_consequence:
+        return NarrativeQualityResult(
+            passed=False,
+            reason="no_real_world_consequence",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+            has_numbers=has_numbers,
+            has_consequence=False,
+        )
+
+    # Check for admin sludge
+    is_sludge, sludge_match = is_admin_sludge(spine.hook)
+    if is_sludge:
+        return NarrativeQualityResult(
+            passed=False,
+            reason=f"admin_sludge: {sludge_match}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    return NarrativeQualityResult(
+        passed=True,
+        clarity_score=spine.standalone_clarity_score,
+        emotional_hook=spine.emotional_hook,
+        has_numbers=has_numbers,
+        has_consequence=has_consequence,
+    )
+
+
+# =====================================================
+# STORY COMPRESSION QUALITY GATE
+# =====================================================
+
+@dataclass
+class HeadlineQualityResult:
+    """Result of headline quality check."""
+    passed: bool
+    reason: Optional[str] = None
+    has_number: bool = False
+    has_consequence: bool = False
+    headline_length: int = 0
+
+
+def check_headline_quality(
+    headline: str,
+    min_length: int = 30,
+    max_length: int = 300,
+) -> HeadlineQualityResult:
+    """
+    Check if a compressed headline meets quality requirements.
+
+    Requirements:
+    - Contains at least one number
+    - No source label prefixes
+    - Within length bounds
+    - No exclamation marks (clickbait indicator)
+
+    Args:
+        headline: The compressed headline
+        min_length: Minimum character length
+        max_length: Maximum character length
+
+    Returns:
+        HeadlineQualityResult
+    """
+    if not headline:
+        return HeadlineQualityResult(
+            passed=False,
+            reason="empty_headline",
+        )
+
+    # Check length
+    headline_length = len(headline)
+    if headline_length < min_length:
+        return HeadlineQualityResult(
+            passed=False,
+            reason=f"too_short: {headline_length} < {min_length}",
+            headline_length=headline_length,
+        )
+
+    if headline_length > max_length:
+        return HeadlineQualityResult(
+            passed=False,
+            reason=f"too_long: {headline_length} > {max_length}",
+            headline_length=headline_length,
+        )
+
+    # Check for numbers
+    has_number = any(char.isdigit() for char in headline)
+    if not has_number:
+        return HeadlineQualityResult(
+            passed=False,
+            reason="no_numbers",
+            headline_length=headline_length,
+            has_number=False,
+        )
+
+    # Check for source prefix patterns
+    source_prefix_patterns = [
+        r'^[A-Z][a-zA-Z\s]+:\s',  # "Guardian Health: "
+        r'^Study:\s',             # "Study: "
+        r'^Research:\s',          # "Research: "
+    ]
+    for pattern in source_prefix_patterns:
+        if re.match(pattern, headline):
+            return HeadlineQualityResult(
+                passed=False,
+                reason=f"has_source_prefix",
+                headline_length=headline_length,
+                has_number=has_number,
+            )
+
+    # Check for exclamation marks (clickbait indicator)
+    if '!' in headline:
+        return HeadlineQualityResult(
+            passed=False,
+            reason="has_exclamation_mark",
+            headline_length=headline_length,
+            has_number=has_number,
+        )
+
+    # Check for consequence (should have some impact statement)
+    consequence_patterns = [
+        r"\d+%",  # Percentage
+        r"risk",
+        r"chance",
+        r"likely",
+        r"linked to",
+        r"associated with",
+        r"leads? to",
+        r"causes?",
+        r"reduces?",
+        r"increases?",
+    ]
+    has_consequence = any(re.search(p, headline, re.IGNORECASE) for p in consequence_patterns)
+
+    return HeadlineQualityResult(
+        passed=True,
+        has_number=has_number,
+        has_consequence=has_consequence,
+        headline_length=headline_length,
+    )
+
+
+# =====================================================
+# OUTPUT DIVERSITY ENFORCEMENT
+# =====================================================
+
+class ArchetypeDiversityEnforcer:
+    """
+    Enforces output diversity by archetype.
+
+    Prevents too many STUDY_STAT items in a single run.
+    """
+
+    def __init__(
+        self,
+        max_study_stat: int = 2,
+        max_per_archetype: int = 3,
+    ):
+        """
+        Initialize enforcer.
+
+        Args:
+            max_study_stat: Maximum STUDY_STAT items per run
+            max_per_archetype: Maximum items per any archetype
+        """
+        self.max_study_stat = max_study_stat
+        self.max_per_archetype = max_per_archetype
+        self.archetype_counts: dict[str, int] = {}
+
+    def can_add(self, archetype: str) -> tuple[bool, Optional[str]]:
+        """
+        Check if we can add an item with this archetype.
+
+        Args:
+            archetype: The content archetype
+
+        Returns:
+            Tuple of (can_add, reason_if_not)
+        """
+        current_count = self.archetype_counts.get(archetype, 0)
+
+        # Special limit for STUDY_STAT
+        if archetype == "STUDY_STAT" and current_count >= self.max_study_stat:
+            return False, f"max_study_stat_reached ({self.max_study_stat})"
+
+        # General archetype limit
+        if current_count >= self.max_per_archetype:
+            return False, f"max_archetype_reached ({self.max_per_archetype})"
+
+        return True, None
+
+    def add(self, archetype: str) -> None:
+        """Record that an item with this archetype was added."""
+        self.archetype_counts[archetype] = self.archetype_counts.get(archetype, 0) + 1
+
+    def get_counts(self) -> dict[str, int]:
+        """Get current archetype counts."""
+        return dict(self.archetype_counts)
+
+    def reset(self) -> None:
+        """Reset counts for a new run."""
+        self.archetype_counts = {}
