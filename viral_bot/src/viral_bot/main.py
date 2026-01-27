@@ -1,17 +1,18 @@
 """
-Main orchestration module with anti-generic pipeline.
+Main orchestration module with story-compression pipeline.
 
 Coordinates the full workflow:
-1. Fetch content from sources
+1. Fetch content from tiered sources
 2. Fetch full article/abstract text
 3. Pre-AI generic filter
 4. Deduplicate (URL + semantic)
-5. Evaluate virality with AI
-6. Post-AI differentiator gate
-7. Novelty check against history
-8. Mix outputs for diversity
-9. Generate headlines and image suggestions
-10. Export to Google Sheets
+5. Extract narrative spine (AI Stage #1)
+6. Quality gate on narrative
+7. Story compression (AI Stage #2)
+8. Headline quality gate
+9. Novelty check against history
+10. Mix outputs for diversity (max 2 STUDY_STAT)
+11. Export to Google Sheets
 
 Produces detailed run reports for debugging.
 """
@@ -26,14 +27,25 @@ from .config import get_settings
 from .logging_conf import get_logger, bind_context, setup_logging
 from .db import get_database, ContentItem, Evaluation, Output
 from .sources import get_source_registry, FetchedItem
+from .sources.registry import CredibilityTier
 from .normalize import NormalizedItem, ContentType
 from .content_fetch import ContentFetcher
-from .anti_generic import GenericFilter, check_post_ai_differentiators, format_differentiator_summary
+from .anti_generic import (
+    GenericFilter,
+    check_narrative_quality,
+    check_headline_quality,
+    ArchetypeDiversityEnforcer,
+    format_differentiator_summary,
+)
 from .novelty import NoveltyChecker, load_novelty_data_from_db
 from .mixer import OutputMixer, MixingConfig
 from .dedupe import Deduplicator, load_recent_data_from_db
-from .openai_eval import ViralityPredictor, EvaluationResult
-from .openai_generate import ContentGenerator, GenerationResult
+from .narrative_extractor import NarrativeExtractor, NarrativeSpine
+from .story_generator import (
+    StoryCompressor,
+    StoryCompressionResult,
+    story_compression_to_generation_result,
+)
 from .sheets import SheetsExporter
 
 logger = get_logger(__name__)
@@ -47,6 +59,7 @@ class RunReport:
         self.rejection_reasons = defaultdict(int)
         self.rejection_examples = []
         self.accepted_items = []
+        self.tier_distribution = defaultdict(int)
 
     def log_rejection(self, stage: str, reason: str, title: str):
         """Log a rejection."""
@@ -58,20 +71,25 @@ class RunReport:
                 "title": title[:100],
             })
 
-    def log_acceptance(self, item, eval_result):
+    def log_acceptance(self, item, spine: NarrativeSpine, result: StoryCompressionResult):
         """Log an accepted item."""
         self.accepted_items.append({
             "title": item.title[:100] if hasattr(item, 'title') else str(item)[:100],
-            "score": eval_result.virality_score,
-            "archetype": eval_result.suggested_archetype,
-            "numbers": eval_result.must_include_numbers[:3] if eval_result.must_include_numbers else [],
+            "headline": result.headline[:80],
+            "archetype": spine.content_archetype,
+            "clarity_score": spine.standalone_clarity_score,
+            "emotional_hook": spine.emotional_hook,
+            "tier": item.credibility_tier.value if hasattr(item, 'credibility_tier') else "?",
         })
+        # Track tier distribution
+        if hasattr(item, 'credibility_tier'):
+            self.tier_distribution[item.credibility_tier.value] += 1
 
     def get_summary(self) -> str:
         """Get formatted summary."""
         lines = [
             "=" * 60,
-            "RUN REPORT",
+            "RUN REPORT - STORY COMPRESSION PIPELINE",
             "=" * 60,
             "",
             "PIPELINE STATISTICS:",
@@ -79,6 +97,13 @@ class RunReport:
 
         for key, value in sorted(self.stats.items()):
             lines.append(f"  {key}: {value}")
+
+        lines.extend([
+            "",
+            "TIER DISTRIBUTION:",
+        ])
+        for tier, count in sorted(self.tier_distribution.items()):
+            lines.append(f"  Tier {tier}: {count}")
 
         lines.extend([
             "",
@@ -100,13 +125,11 @@ class RunReport:
         if self.accepted_items:
             lines.extend([
                 "",
-                "ACCEPTED ITEMS:",
+                "ACCEPTED HEADLINES:",
             ])
             for item in self.accepted_items[:5]:
-                lines.append(f"  [{item['archetype']}] Score: {item['score']}")
-                lines.append(f"    Title: {item['title']}")
-                if item['numbers']:
-                    lines.append(f"    Numbers: {', '.join(item['numbers'])}")
+                lines.append(f"  [{item['archetype']}] Tier {item['tier']}, Clarity: {item['clarity_score']}")
+                lines.append(f"    {item['headline']}")
 
         lines.append("=" * 60)
         return "\n".join(lines)
@@ -114,7 +137,7 @@ class RunReport:
 
 class BotRunner:
     """
-    Main bot runner that orchestrates the full workflow.
+    Main bot runner with story-compression pipeline.
     """
 
     def __init__(self):
@@ -131,8 +154,8 @@ class BotRunner:
             min_body_chars_news=self.settings.min_body_chars_news,
             min_differentiators=self.settings.min_differentiators,
         )
-        self.predictor = ViralityPredictor()
-        self.generator = ContentGenerator()
+        self.narrative_extractor = NarrativeExtractor()
+        self.story_compressor = StoryCompressor()
         self.exporter = SheetsExporter()
 
         logger.info("bot_runner_initialized")
@@ -150,7 +173,7 @@ class BotRunner:
         dry_run: bool = False,
     ) -> dict:
         """
-        Execute one full bot run.
+        Execute one full bot run with story-compression pipeline.
 
         Args:
             freshness_hours: Override default freshness window
@@ -181,12 +204,12 @@ class BotRunner:
             "items_with_content": 0,
             "items_after_pre_filter": 0,
             "items_after_dedup": 0,
-            "items_evaluated": 0,
-            "items_relevant": 0,
-            "items_after_post_filter": 0,
+            "items_with_narrative": 0,
+            "items_after_narrative_gate": 0,
+            "items_with_headline": 0,
+            "items_after_headline_gate": 0,
             "items_after_novelty": 0,
-            "items_after_mixing": 0,
-            "items_generated": 0,
+            "items_after_diversity": 0,
             "items_exported": 0,
             "errors": [],
             "dry_run": dry_run,
@@ -198,7 +221,7 @@ class BotRunner:
             # Record run start
             self.db.start_run(session, run_id)
 
-            # === STEP 1: Fetch content from all sources ===
+            # === STEP 1: Fetch content from tiered sources ===
             logger.info("step_1_fetching_content")
             report.stats["step"] = 1
 
@@ -250,7 +273,6 @@ class BotRunner:
                 stats["items_after_pre_filter"] = len(filtered_items)
                 report.stats["after_pre_filter"] = len(filtered_items)
                 normalized_items = filtered_items
-
             else:
                 stats["items_after_pre_filter"] = len(normalized_items)
                 report.stats["after_pre_filter"] = len(normalized_items)
@@ -275,7 +297,6 @@ class BotRunner:
                 recent_embeddings=recent_embeddings,
             )
 
-            # Convert back to FetchedItem-like for dedup (uses URL and title)
             unique_normalized = self._dedupe_normalized(deduplicator, normalized_items)
             stats["items_after_dedup"] = len(unique_normalized)
             report.stats["after_dedup"] = len(unique_normalized)
@@ -288,89 +309,90 @@ class BotRunner:
                 logger.warning("no_items_after_dedup")
                 return self._complete_run(session, run_id, stats, report)
 
-            # === STEP 5: Save items to database ===
-            logger.info("step_5_saving_items")
+            # === STEP 5: Extract Narrative Spine (AI Stage #1) ===
+            logger.info("step_5_narrative_extraction")
+            report.stats["step"] = 5
 
-            db_items = []
+            items_with_spines = []
             for item in unique_normalized:
-                db_item, created = self.db.get_or_create_item(
-                    session,
-                    source=item.source_name,
-                    url=item.url,
-                    title=item.title,
-                    published_at=item.published_at,
-                    summary=item.snippet or item.body_text[:500],
-                )
-                if created:
-                    db_items.append((item, db_item))
+                spine = self.narrative_extractor.extract(item)
+                if spine:
+                    items_with_spines.append((item, spine))
+                else:
+                    report.log_rejection("narrative", "extraction_failed", item.title)
 
-            session.commit()
-            logger.info("items_saved", count=len(db_items))
+            stats["items_with_narrative"] = len(items_with_spines)
+            report.stats["with_narrative"] = len(items_with_spines)
 
-            # === STEP 6: Evaluate virality ===
-            logger.info("step_6_evaluating_virality")
+            if not items_with_spines:
+                logger.warning("no_items_with_narrative")
+                return self._complete_run(session, run_id, stats, report)
+
+            # === STEP 6: Narrative Quality Gate ===
+            logger.info("step_6_narrative_quality_gate")
             report.stats["step"] = 6
 
-            # Only evaluate new items
-            items_to_evaluate = [item for item, _ in db_items]
+            quality_passed = []
+            for item, spine in items_with_spines:
+                result = check_narrative_quality(
+                    spine,
+                    min_clarity_score=self.settings.min_clarity_score,
+                    require_emotional_hook=True,
+                )
+                if result.passed:
+                    quality_passed.append((item, spine))
+                else:
+                    report.log_rejection("narrative_quality", result.reason or "unknown", item.title)
 
-            evaluated = self.predictor.evaluate_batch(
-                items_to_evaluate,
-                min_score=self.settings.min_virality_score,
-            )
-            stats["items_evaluated"] = len(items_to_evaluate)
-            stats["items_relevant"] = len(evaluated)
-            report.stats["evaluated"] = len(items_to_evaluate)
-            report.stats["relevant"] = len(evaluated)
+            stats["items_after_narrative_gate"] = len(quality_passed)
+            report.stats["after_narrative_gate"] = len(quality_passed)
 
-            # Log AI rejections
-            ai_rejected = len(items_to_evaluate) - len(evaluated)
-            if ai_rejected > 0:
-                report.rejection_reasons["ai_eval:not_relevant_or_low_score"] = ai_rejected
-
-            if not evaluated:
-                logger.warning("no_relevant_items")
+            if not quality_passed:
+                logger.warning("no_items_after_narrative_gate")
                 return self._complete_run(session, run_id, stats, report)
 
-            # === STEP 7: Post-AI differentiator filter ===
-            if self.settings.enable_post_ai_filter:
-                logger.info("step_7_post_ai_filter")
-                report.stats["step"] = 7
+            # === STEP 7: Story Compression (AI Stage #2) ===
+            logger.info("step_7_story_compression")
+            report.stats["step"] = 7
 
-                post_filtered = []
-                for item, eval_result in evaluated:
-                    passed, reason, reqs = check_post_ai_differentiators(
-                        eval_result.to_dict(),
-                        min_differentiators=self.settings.min_differentiators,
-                    )
-                    if passed:
-                        post_filtered.append((item, eval_result))
-                        report.log_acceptance(item, eval_result)
-                    else:
-                        report.log_rejection(
-                            "post_ai",
-                            reason or "insufficient_differentiators",
-                            item.title,
-                        )
+            items_with_headlines = []
+            for item, spine in quality_passed:
+                result = self.story_compressor.compress(item, spine)
+                if result:
+                    items_with_headlines.append((item, spine, result))
+                else:
+                    report.log_rejection("compression", "generation_failed", item.title)
 
-                stats["items_after_post_filter"] = len(post_filtered)
-                report.stats["after_post_filter"] = len(post_filtered)
-                evaluated = post_filtered
+            stats["items_with_headline"] = len(items_with_headlines)
+            report.stats["with_headline"] = len(items_with_headlines)
 
-            else:
-                stats["items_after_post_filter"] = len(evaluated)
-                for item, eval_result in evaluated:
-                    report.log_acceptance(item, eval_result)
-
-            if not evaluated:
-                logger.warning("no_items_after_post_filter")
+            if not items_with_headlines:
+                logger.warning("no_items_with_headline")
                 return self._complete_run(session, run_id, stats, report)
 
-            # === STEP 8: Novelty check ===
-            logger.info("step_8_novelty_check")
+            # === STEP 8: Headline Quality Gate ===
+            logger.info("step_8_headline_quality_gate")
             report.stats["step"] = 8
 
-            # Load recent findings for novelty check
+            headline_passed = []
+            for item, spine, result in items_with_headlines:
+                quality_result = check_headline_quality(result.headline)
+                if quality_result.passed:
+                    headline_passed.append((item, spine, result))
+                else:
+                    report.log_rejection("headline_quality", quality_result.reason or "unknown", item.title)
+
+            stats["items_after_headline_gate"] = len(headline_passed)
+            report.stats["after_headline_gate"] = len(headline_passed)
+
+            if not headline_passed:
+                logger.warning("no_items_after_headline_gate")
+                return self._complete_run(session, run_id, stats, report)
+
+            # === STEP 9: Novelty Check ===
+            logger.info("step_9_novelty_check")
+            report.stats["step"] = 9
+
             recent_findings = load_novelty_data_from_db(
                 self.db, session,
                 days=self.settings.novelty_retention_days,
@@ -384,19 +406,12 @@ class BotRunner:
             novelty_checker.load_recent_findings(recent_findings)
 
             novelty_passed = []
-            for item, eval_result in evaluated:
-                finding = eval_result.most_surprising_finding or eval_result.extracted_claim or item.title
-                novelty_result, adjusted_score = novelty_checker.check_novelty(
-                    finding,
-                    eval_result.virality_score,
-                )
+            for item, spine, result in headline_passed:
+                finding = spine.hook or result.headline
+                novelty_result, _ = novelty_checker.check_novelty(finding, 1.0)
 
                 if novelty_result.is_novel:
-                    # Update score if penalized
-                    if adjusted_score != eval_result.virality_score:
-                        eval_result.virality_score = adjusted_score
-                    novelty_passed.append((item, eval_result))
-                    # Add to checker for subsequent items
+                    novelty_passed.append((item, spine, result))
                     novelty_checker.add_finding(finding)
                 else:
                     report.log_rejection(
@@ -412,96 +427,54 @@ class BotRunner:
                 logger.warning("no_items_after_novelty")
                 return self._complete_run(session, run_id, stats, report)
 
-            # === STEP 9: Mix outputs for diversity ===
-            logger.info("step_9_mixing_outputs")
-            report.stats["step"] = 9
-
-            mixer_config = MixingConfig(
-                max_study_stat=self.settings.max_study_stat_per_run,
-                min_non_study_stat=self.settings.min_non_study_stat_per_run,
-                max_per_archetype=self.settings.max_per_archetype,
-            )
-            mixer = OutputMixer(mixer_config)
-
-            # Re-sort by score after novelty penalties
-            novelty_passed.sort(key=lambda x: x[1].virality_score or 0, reverse=True)
-
-            mixed = mixer.select_outputs(novelty_passed, max_outputs=max_outputs)
-            stats["items_after_mixing"] = len(mixed)
-            report.stats["after_mixing"] = len(mixed)
-            report.stats["archetype_distribution"] = mixer.get_archetype_summary()
-
-            # Save evaluations to database
-            item_to_db_id = {item.url: db_item.id for item, db_item in db_items}
-
-            for item, eval_result in mixed:
-                db_item_id = item_to_db_id.get(item.url)
-                if db_item_id:
-                    self.db.save_evaluation(
-                        session,
-                        item_id=db_item_id,
-                        relevant=eval_result.relevant,
-                        relevance_reason=eval_result.reason,
-                        virality_score=eval_result.virality_score,
-                        confidence=eval_result.confidence,
-                        suggested_archetype=eval_result.suggested_archetype,
-                        extracted_claim=eval_result.most_surprising_finding or eval_result.extracted_claim,
-                        why_it_will_work=eval_result.why_it_will_work,
-                        must_include_numbers=eval_result.must_include_numbers,
-                    )
-
-            session.commit()
-
-            # === STEP 10: Generate headlines and image suggestions ===
-            logger.info("step_10_generating_content")
+            # === STEP 10: Output Diversity (max 2 STUDY_STAT) ===
+            logger.info("step_10_diversity_enforcement")
             report.stats["step"] = 10
 
-            generated = self.generator.generate_batch(
-                mixed,
-                max_outputs=max_outputs,
+            diversity_enforcer = ArchetypeDiversityEnforcer(
+                max_study_stat=self.settings.max_study_stat_per_run,
+                max_per_archetype=self.settings.max_per_archetype,
             )
-            stats["items_generated"] = len(generated)
-            report.stats["generated"] = len(generated)
 
-            if not generated:
-                logger.warning("no_content_generated")
-                return self._complete_run(session, run_id, stats, report)
+            # Sort by clarity score (higher is better)
+            novelty_passed.sort(key=lambda x: x[1].standalone_clarity_score, reverse=True)
 
-            # Save outputs to database
-            for item, eval_result, gen_result in generated:
-                db_item_id = item_to_db_id.get(item.url)
-                if db_item_id:
-                    self.db.save_output(
-                        session,
-                        run_id=run_id,
-                        item_id=db_item_id,
-                        headline=gen_result.headline.image_headline,
-                        archetype=eval_result.suggested_archetype or "STUDY_STAT",
-                        image_suggestion=gen_result.image.image_suggestion,
-                        layout_notes=gen_result.image.layout_notes,
-                        highlight_words=gen_result.image.highlight_words,
-                        extracted_claim=eval_result.most_surprising_finding or eval_result.extracted_claim,
-                        virality_score=eval_result.virality_score,
-                        confidence=eval_result.confidence,
-                        why_it_will_work=eval_result.why_it_will_work,
-                        sources_json={
-                            "source_name": item.source_name,
-                            "url": item.url,
-                            "title": item.title,
-                            "population": eval_result.population,
-                            "time_window": eval_result.time_window,
-                            "study_type": eval_result.study_type,
-                        },
-                    )
+            final_outputs = []
+            for item, spine, result in novelty_passed:
+                if len(final_outputs) >= max_outputs:
+                    break
 
+                can_add, reason = diversity_enforcer.can_add(spine.content_archetype)
+                if can_add:
+                    diversity_enforcer.add(spine.content_archetype)
+                    final_outputs.append((item, spine, result))
+                    report.log_acceptance(item, spine, result)
+                else:
+                    report.log_rejection("diversity", reason or "unknown", item.title)
+
+            stats["items_after_diversity"] = len(final_outputs)
+            report.stats["after_diversity"] = len(final_outputs)
+            report.stats["archetype_distribution"] = diversity_enforcer.get_counts()
+
+            # Save to database
+            self._save_to_database(session, run_id, final_outputs)
             session.commit()
 
             # === STEP 11: Export to Google Sheets ===
-            if not dry_run:
+            if not dry_run and final_outputs:
                 logger.info("step_11_exporting_to_sheets")
+                report.stats["step"] = 11
 
                 try:
-                    exported = self.exporter.export_outputs(run_id, generated)
+                    # Convert to legacy format for sheets exporter
+                    export_data = []
+                    for item, spine, result in final_outputs:
+                        gen_result = story_compression_to_generation_result(result)
+                        # Create a mock evaluation for backward compat
+                        mock_eval = self._spine_to_mock_eval(spine)
+                        export_data.append((item, mock_eval, gen_result))
+
+                    exported = self.exporter.export_outputs_v2(run_id, final_outputs)
                     stats["items_exported"] = exported
                     report.stats["exported"] = exported
                 except Exception as e:
@@ -521,7 +494,7 @@ class BotRunner:
             self.db.complete_run(
                 session, run_id, "FAILED",
                 items_fetched=stats["items_fetched"],
-                items_evaluated=stats.get("items_evaluated", 0),
+                items_evaluated=stats.get("items_with_narrative", 0),
                 items_output=0,
                 error_message=str(e),
             )
@@ -530,6 +503,82 @@ class BotRunner:
 
         finally:
             session.close()
+
+    def _spine_to_mock_eval(self, spine: NarrativeSpine):
+        """Create a mock evaluation object from a spine for backward compat."""
+        from dataclasses import dataclass, field
+        from typing import Optional
+
+        @dataclass
+        class MockEval:
+            relevant: bool = True
+            reason: Optional[str] = None
+            virality_score: int = 8
+            confidence: float = 0.8
+            suggested_archetype: str = ""
+            extracted_claim: str = ""
+            most_surprising_finding: str = ""
+            why_it_will_work: list = field(default_factory=list)
+            must_include_numbers: list = field(default_factory=list)
+            population: str = ""
+            time_window: str = ""
+            study_type: str = ""
+
+        return MockEval(
+            suggested_archetype=spine.content_archetype,
+            extracted_claim=spine.hook,
+            most_surprising_finding=spine.hook,
+            why_it_will_work=[spine.real_world_consequence],
+            must_include_numbers=spine.key_numbers,
+            population=spine.who_it_applies_to,
+            time_window=spine.time_window,
+            study_type=spine.support_level,
+        )
+
+    def _save_to_database(
+        self,
+        session,
+        run_id: str,
+        outputs: list[tuple[NormalizedItem, NarrativeSpine, StoryCompressionResult]],
+    ):
+        """Save outputs to database."""
+        for item, spine, result in outputs:
+            # Save content item
+            db_item, created = self.db.get_or_create_item(
+                session,
+                source=item.source_name,
+                url=item.url,
+                title=item.title,
+                published_at=item.published_at,
+                summary=item.snippet or item.body_text[:500],
+            )
+
+            if created:
+                # Save output
+                self.db.save_output(
+                    session,
+                    run_id=run_id,
+                    item_id=db_item.id,
+                    headline=result.headline,
+                    archetype=spine.content_archetype,
+                    image_suggestion=result.image_suggestion,
+                    layout_notes=result.layout_notes,
+                    highlight_words=result.highlight_words,
+                    extracted_claim=spine.hook,
+                    virality_score=spine.standalone_clarity_score,  # Using clarity as proxy
+                    confidence=0.8,
+                    why_it_will_work=[spine.real_world_consequence],
+                    sources_json={
+                        "source_name": item.source_name,
+                        "url": item.url,
+                        "title": item.title,
+                        "population": spine.who_it_applies_to,
+                        "time_window": spine.time_window,
+                        "emotional_hook": spine.emotional_hook,
+                        "support_level": spine.support_level,
+                        "credibility_tier": item.credibility_tier.value,
+                    },
+                )
 
     def _complete_run(
         self,
@@ -542,8 +591,8 @@ class BotRunner:
         self.db.complete_run(
             session, run_id, "SUCCESS",
             items_fetched=stats["items_fetched"],
-            items_evaluated=stats.get("items_evaluated", 0),
-            items_output=stats.get("items_generated", 0),
+            items_evaluated=stats.get("items_with_narrative", 0),
+            items_output=stats.get("items_after_diversity", 0),
         )
 
         stats["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -566,12 +615,7 @@ class BotRunner:
         deduplicator: Deduplicator,
         items: list[NormalizedItem],
     ) -> list[NormalizedItem]:
-        """
-        Deduplicate normalized items.
-
-        Creates temporary FetchedItem-like objects for compatibility.
-        """
-        # URL dedup
+        """Deduplicate normalized items."""
         seen_urls = set(deduplicator.recent_urls)
         unique = []
 
@@ -582,9 +626,6 @@ class BotRunner:
             seen_urls.add(url)
             unique.append(item)
 
-        # Semantic dedup would require embeddings - skip for normalized items
-        # as they've already been filtered for sufficient content
-
         return unique
 
 
@@ -593,17 +634,7 @@ async def run_bot(
     max_outputs: Optional[int] = None,
     dry_run: bool = False,
 ) -> dict:
-    """
-    Convenience function to run the bot.
-
-    Args:
-        freshness_hours: Override default freshness window
-        max_outputs: Override default max outputs
-        dry_run: If True, don't write to Sheets
-
-    Returns:
-        Run statistics
-    """
+    """Convenience function to run the bot."""
     runner = BotRunner()
     return await runner.run(freshness_hours, max_outputs, dry_run)
 
@@ -613,15 +644,13 @@ def run_bot_sync(
     max_outputs: Optional[int] = None,
     dry_run: bool = False,
 ) -> dict:
-    """
-    Synchronous wrapper for run_bot.
-    """
+    """Synchronous wrapper for run_bot."""
     return asyncio.run(run_bot(freshness_hours, max_outputs, dry_run))
 
 
 async def debug_single_url(url: str) -> dict:
     """
-    Debug the full pipeline for a single URL.
+    Debug the full story-compression pipeline for a single URL.
 
     Args:
         url: URL to process
@@ -630,7 +659,6 @@ async def debug_single_url(url: str) -> dict:
         Debug information at each step
     """
     from .sources.base import FetchedItem
-    from datetime import datetime, timezone
 
     settings = get_settings()
     debug_info = {"url": url, "steps": {}}
@@ -651,12 +679,13 @@ async def debug_single_url(url: str) -> dict:
     debug_info["steps"]["content_fetch"] = {
         "body_length": normalized.body_length,
         "content_type": normalized.content_type.value,
+        "credibility_tier": normalized.credibility_tier.value,
         "title": normalized.title,
         "body_preview": normalized.body_text[:500] if normalized.body_text else None,
-        "metadata": normalized.metadata,
     }
     print(f"  Body length: {normalized.body_length}")
     print(f"  Content type: {normalized.content_type.value}")
+    print(f"  Credibility tier: {normalized.credibility_tier.value}")
 
     # Step 2: Pre-AI filter
     print("\nStep 2: Pre-AI generic filter...")
@@ -677,59 +706,68 @@ async def debug_single_url(url: str) -> dict:
         print("\n[STOPPED] Item rejected by pre-AI filter")
         return debug_info
 
-    # Step 3: AI Evaluation
-    print("\nStep 3: AI Evaluation...")
-    predictor = ViralityPredictor()
-    eval_result = predictor.evaluate(normalized)
-    debug_info["steps"]["ai_evaluation"] = eval_result.to_dict()
-    print(f"  Relevant: {eval_result.relevant}")
-    print(f"  Score: {eval_result.virality_score}")
-    print(f"  Archetype: {eval_result.suggested_archetype}")
-    print(f"  Finding: {eval_result.most_surprising_finding}")
-    print(f"  Numbers: {eval_result.must_include_numbers}")
-    print(f"  Population: {eval_result.population}")
-    print(f"  Time window: {eval_result.time_window}")
+    # Step 3: Narrative Extraction
+    print("\nStep 3: Narrative Spine Extraction...")
+    extractor = NarrativeExtractor()
+    spine = extractor.extract(normalized)
 
-    if not eval_result.relevant:
-        print(f"\n[STOPPED] Item not relevant: {eval_result.reason}")
+    if spine is None:
+        debug_info["steps"]["narrative_extraction"] = {"error": "Extraction failed"}
+        print("  [FAILED] Could not extract narrative")
         return debug_info
 
-    # Step 4: Post-AI filter
-    print("\nStep 4: Post-AI differentiator check...")
-    passed, reason, reqs = check_post_ai_differentiators(
-        eval_result.to_dict(),
-        min_differentiators=settings.min_differentiators,
+    debug_info["steps"]["narrative_extraction"] = spine.to_dict()
+    print(f"  Hook: {spine.hook[:80]}...")
+    print(f"  Key numbers: {spine.key_numbers}")
+    print(f"  Who: {spine.who_it_applies_to}")
+    print(f"  Time: {spine.time_window}")
+    print(f"  Consequence: {spine.real_world_consequence[:80]}...")
+    print(f"  Clarity score: {spine.standalone_clarity_score}")
+    print(f"  Emotional hook: {spine.emotional_hook}")
+    print(f"  Archetype: {spine.content_archetype}")
+
+    # Step 4: Narrative Quality Gate
+    print("\nStep 4: Narrative Quality Gate...")
+    quality_result = check_narrative_quality(
+        spine,
+        min_clarity_score=settings.min_clarity_score,
     )
-    debug_info["steps"]["post_ai_filter"] = {
-        "passed": passed,
-        "reason": reason,
-        "differentiators": {
-            "number": reqs.number_value,
-            "population": reqs.population_value,
-            "time_window": reqs.time_window_value,
-            "comparison": reqs.comparison_value,
-        },
+    debug_info["steps"]["narrative_quality"] = {
+        "passed": quality_result.passed,
+        "reason": quality_result.reason,
     }
-    print(f"  Passed: {passed}")
-    print(f"  Differentiators: {format_differentiator_summary(reqs)}")
-
-    if not passed:
-        print(f"\n[STOPPED] Insufficient differentiators: {reason}")
+    print(f"  Passed: {quality_result.passed}")
+    if not quality_result.passed:
+        print(f"  Reason: {quality_result.reason}")
+        print("\n[STOPPED] Item rejected by narrative quality gate")
         return debug_info
 
-    # Step 5: Generate headline
-    print("\nStep 5: Generating headline...")
-    generator = ContentGenerator()
-    gen_result = generator.generate(eval_result, normalized.source_name)
+    # Step 5: Story Compression
+    print("\nStep 5: Story Compression...")
+    compressor = StoryCompressor()
+    result = compressor.compress(normalized, spine)
 
-    if gen_result:
-        debug_info["steps"]["generation"] = gen_result.to_dict()
-        print(f"  Headline: {gen_result.headline.image_headline}")
-        print(f"  Image: {gen_result.image.image_suggestion}")
-        print(f"  Highlight: {gen_result.image.highlight_words}")
-    else:
-        debug_info["steps"]["generation"] = {"error": "Generation failed"}
-        print("  [FAILED] Could not generate headline")
+    if result is None:
+        debug_info["steps"]["story_compression"] = {"error": "Compression failed"}
+        print("  [FAILED] Could not compress story")
+        return debug_info
+
+    debug_info["steps"]["story_compression"] = result.to_dict()
+    print(f"  Headline: {result.headline}")
+    print(f"  Highlight words: {result.highlight_words}")
+    print(f"  Image suggestion: {result.image_suggestion}")
+
+    # Step 6: Headline Quality Gate
+    print("\nStep 6: Headline Quality Gate...")
+    headline_quality = check_headline_quality(result.headline)
+    debug_info["steps"]["headline_quality"] = {
+        "passed": headline_quality.passed,
+        "reason": headline_quality.reason,
+        "has_number": headline_quality.has_number,
+    }
+    print(f"  Passed: {headline_quality.passed}")
+    if not headline_quality.passed:
+        print(f"  Reason: {headline_quality.reason}")
 
     print("\n" + "=" * 60)
     print("DEBUG COMPLETE")

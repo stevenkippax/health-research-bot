@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     content_fetch_timeout: float = Field(30.0, description="Timeout for content fetching (seconds)")
     max_concurrent_content_fetches: int = Field(5, description="Max concurrent content fetch requests")
 
+    # Story compression settings (NEW - V2 pipeline)
+    min_clarity_score: int = Field(7, description="Minimum standalone clarity score (1-10)")
+    require_emotional_hook: bool = Field(True, description="Require emotional_hook != 'none'")
+    tier_a_target_ratio: float = Field(0.65, description="Target ratio of Tier A sources (0-1)")
+    tier_b_target_ratio: float = Field(0.25, description="Target ratio of Tier B sources (0-1)")
+    tier_c_target_ratio: float = Field(0.10, description="Target ratio of Tier C sources (0-1)")
+
     # Server
     enable_health_server: bool = Field(True, description="Enable FastAPI health server")
     port: int = Field(8000, description="Health server port")

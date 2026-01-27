@@ -1,12 +1,12 @@
 """
-Google Sheets integration for output export.
+Google Sheets integration for story-compressed output export.
 
-Appends generated post ideas to a Google Sheet for review and tracking.
-Now includes additional columns for population, time_window, and study_type.
+Appends generated post ideas to a Google Sheet with extended columns for
+narrative spine data, credibility tiers, and story compression metrics.
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import json
 
 import gspread
@@ -14,6 +14,11 @@ from google.oauth2.service_account import Credentials
 
 from .config import get_settings
 from .logging_conf import get_logger
+
+if TYPE_CHECKING:
+    from .normalize import NormalizedItem
+    from .narrative_extractor import NarrativeSpine
+    from .story_generator import StoryCompressionResult
 
 logger = get_logger(__name__)
 
@@ -24,7 +29,47 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Column headers for the output sheet (EXPANDED)
+# Column headers for the output sheet (V2 - Story Compression)
+SHEET_HEADERS_V2 = [
+    # Core columns
+    "run_timestamp_utc",
+    "source_name",
+    "source_url",
+    "published_at",
+    "credibility_tier",          # NEW: A/B/C tier
+    "content_type",              # NEW: paper/news/press_release/etc
+
+    # Narrative spine columns
+    "hook",                      # NEW: The attention-grabbing element
+    "who_it_applies_to",         # NEW: Population
+    "time_window",               # NEW: Duration/time frame
+    "key_numbers",               # NEW: List of specific numbers
+    "mechanism_or_why",          # NEW: Causation explanation
+    "real_world_consequence",    # NEW: Plain language impact
+
+    # Story compression output
+    "image_headline",            # The final compressed headline
+    "archetype",                 # Content archetype
+
+    # Quality metrics
+    "standalone_clarity_score",  # NEW: 1-10 score
+    "emotional_hook",            # NEW: fear/hope/surprise/etc
+    "support_level",             # NEW: strong/moderate/emerging/preliminary
+
+    # Image/design
+    "image_suggestion",
+    "layout_notes",              # NEW: List of layout notes
+    "highlight_words",           # NEW: Words to highlight
+
+    # Status and feedback
+    "status",
+    "feedback_likes",
+    "feedback_shares",
+    "feedback_saves",
+    "feedback_notes",
+]
+
+# Legacy headers for backward compatibility
 SHEET_HEADERS = [
     "run_timestamp_utc",
     "archetype",
@@ -38,12 +83,10 @@ SHEET_HEADERS = [
     "image_suggestion",
     "why_it_will_work",
     "status",
-    # NEW COLUMNS
     "population",
     "time_window",
     "study_type",
     "must_include_numbers",
-    # Feedback columns
     "feedback_likes",
     "feedback_shares",
     "feedback_saves",
@@ -114,9 +157,10 @@ class SheetsExporter:
             tab_name=self.tab_name,
         )
 
-    def _get_or_create_sheet(self) -> gspread.Worksheet:
+    def _get_or_create_sheet(self, use_v2: bool = False) -> gspread.Worksheet:
         """Get or create the worksheet."""
         spreadsheet = self.client.open_by_key(self.sheet_id)
+        headers = SHEET_HEADERS_V2 if use_v2 else SHEET_HEADERS
 
         # Try to get existing worksheet
         try:
@@ -127,34 +171,89 @@ class SheetsExporter:
             worksheet = spreadsheet.add_worksheet(
                 title=self.tab_name,
                 rows=1000,
-                cols=len(SHEET_HEADERS),
+                cols=len(headers),
             )
             # Add headers
-            worksheet.append_row(SHEET_HEADERS)
+            worksheet.append_row(headers)
             logger.info("worksheet_created", tab=self.tab_name)
 
         return worksheet
 
-    def _ensure_headers(self, worksheet: gspread.Worksheet) -> None:
+    def _ensure_headers(self, worksheet: gspread.Worksheet, use_v2: bool = False) -> None:
         """Ensure headers are present and updated in the worksheet."""
-        # Check if first row has headers
+        headers = SHEET_HEADERS_V2 if use_v2 else SHEET_HEADERS
+
         try:
             first_row = worksheet.row_values(1)
             if not first_row:
-                # Empty sheet, add headers
-                worksheet.insert_row(SHEET_HEADERS, 1)
+                worksheet.insert_row(headers, 1)
                 logger.info("headers_added")
-            elif first_row != SHEET_HEADERS:
-                # Headers exist but might be outdated
-                # Check if new columns need to be added
-                if len(first_row) < len(SHEET_HEADERS):
-                    # Add missing columns to header
-                    for i, header in enumerate(SHEET_HEADERS):
+            elif first_row != headers:
+                if len(first_row) < len(headers):
+                    for i, header in enumerate(headers):
                         if i >= len(first_row):
                             worksheet.update_cell(1, i + 1, header)
-                    logger.info("headers_updated", new_columns=len(SHEET_HEADERS) - len(first_row))
+                    logger.info("headers_updated", new_columns=len(headers) - len(first_row))
         except Exception:
-            worksheet.append_row(SHEET_HEADERS)
+            worksheet.append_row(headers)
+
+    def format_row_v2(
+        self,
+        run_id: str,
+        item: "NormalizedItem",
+        spine: "NarrativeSpine",
+        result: "StoryCompressionResult",
+    ) -> list:
+        """
+        Format a row for the V2 story-compression format.
+
+        Args:
+            run_id: Run identifier
+            item: NormalizedItem
+            spine: NarrativeSpine from extraction
+            result: StoryCompressionResult from compression
+
+        Returns:
+            List of cell values matching SHEET_HEADERS_V2
+        """
+        return [
+            # Core columns
+            datetime.now(timezone.utc).isoformat(),       # run_timestamp_utc
+            item.source_name,                              # source_name
+            item.url,                                      # source_url
+            item.published_at.isoformat() if item.published_at else "",  # published_at
+            item.credibility_tier.value,                   # credibility_tier
+            item.content_type.value,                       # content_type
+
+            # Narrative spine columns
+            spine.hook,                                    # hook
+            spine.who_it_applies_to,                       # who_it_applies_to
+            spine.time_window,                             # time_window
+            ", ".join(spine.key_numbers),                  # key_numbers
+            spine.mechanism_or_why,                        # mechanism_or_why
+            spine.real_world_consequence,                  # real_world_consequence
+
+            # Story compression output
+            result.headline,                               # image_headline
+            spine.content_archetype,                       # archetype
+
+            # Quality metrics
+            spine.standalone_clarity_score,                # standalone_clarity_score
+            spine.emotional_hook,                          # emotional_hook
+            spine.support_level,                           # support_level
+
+            # Image/design
+            result.image_suggestion,                       # image_suggestion
+            " | ".join(result.layout_notes),               # layout_notes
+            ", ".join(result.highlight_words),             # highlight_words
+
+            # Status and feedback
+            "NEW",                                         # status
+            "",                                            # feedback_likes
+            "",                                            # feedback_shares
+            "",                                            # feedback_saves
+            "",                                            # feedback_notes
+        ]
 
     def format_row(
         self,
@@ -164,7 +263,7 @@ class SheetsExporter:
         generation,  # GenerationResult
     ) -> list:
         """
-        Format a single output row.
+        Format a single output row (legacy format).
 
         Args:
             run_id: Run identifier
@@ -209,12 +308,14 @@ class SheetsExporter:
     def append_rows(
         self,
         rows: list[list],
+        use_v2: bool = False,
     ) -> int:
         """
         Append multiple rows to the sheet.
 
         Args:
             rows: List of row data
+            use_v2: Use V2 headers
 
         Returns:
             Number of rows appended
@@ -222,8 +323,8 @@ class SheetsExporter:
         if not rows:
             return 0
 
-        worksheet = self._get_or_create_sheet()
-        self._ensure_headers(worksheet)
+        worksheet = self._get_or_create_sheet(use_v2)
+        self._ensure_headers(worksheet, use_v2)
 
         # Append rows
         worksheet.append_rows(rows)
@@ -231,13 +332,37 @@ class SheetsExporter:
         logger.info("rows_appended", count=len(rows))
         return len(rows)
 
+    def export_outputs_v2(
+        self,
+        run_id: str,
+        outputs: list[tuple],  # List of (NormalizedItem, NarrativeSpine, StoryCompressionResult) tuples
+    ) -> int:
+        """
+        Export story-compressed outputs to Google Sheets (V2 format).
+
+        Args:
+            run_id: Run identifier
+            outputs: List of (NormalizedItem, NarrativeSpine, StoryCompressionResult) tuples
+
+        Returns:
+            Number of rows exported
+        """
+        logger.info("exporting_to_sheets_v2", count=len(outputs))
+
+        rows = []
+        for item, spine, result in outputs:
+            row = self.format_row_v2(run_id, item, spine, result)
+            rows.append(row)
+
+        return self.append_rows(rows, use_v2=True)
+
     def export_outputs(
         self,
         run_id: str,
         outputs: list[tuple],  # List of (item, evaluation, generation) tuples
     ) -> int:
         """
-        Export generated outputs to Google Sheets.
+        Export generated outputs to Google Sheets (legacy format).
 
         Args:
             run_id: Run identifier
@@ -253,7 +378,7 @@ class SheetsExporter:
             row = self.format_row(run_id, item, evaluation, generation)
             rows.append(row)
 
-        return self.append_rows(rows)
+        return self.append_rows(rows, use_v2=False)
 
     def get_recent_outputs(self, limit: int = 50) -> list[dict]:
         """
