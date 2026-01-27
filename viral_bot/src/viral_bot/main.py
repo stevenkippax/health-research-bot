@@ -427,7 +427,7 @@ class BotRunner:
                 logger.warning("no_items_after_novelty")
                 return self._complete_run(session, run_id, stats, report)
 
-            # === STEP 10: Output Diversity (max 2 STUDY_STAT) ===
+            # === STEP 10: Output Diversity (prioritize actionable archetypes) ===
             logger.info("step_10_diversity_enforcement")
             report.stats["step"] = 10
 
@@ -436,8 +436,9 @@ class BotRunner:
                 max_per_archetype=self.settings.max_per_archetype,
             )
 
-            # Sort by clarity score (higher is better)
-            novelty_passed.sort(key=lambda x: x[1].standalone_clarity_score, reverse=True)
+            # Sort to prioritize actionable archetypes (SIMPLE_HABIT, WARNING_RISK, IF_THEN)
+            # then by clarity score
+            novelty_passed = ArchetypeDiversityEnforcer.sort_by_priority(novelty_passed)
 
             final_outputs = []
             for item, spine, result in novelty_passed:

@@ -534,6 +534,7 @@ class NarrativeQualityResult:
 def check_narrative_quality(
     spine: "NarrativeSpine",
     min_clarity_score: int = 7,
+    min_lay_relevance: int = 6,
     require_emotional_hook: bool = True,
 ) -> NarrativeQualityResult:
     """
@@ -541,13 +542,17 @@ def check_narrative_quality(
 
     Requirements:
     - standalone_clarity_score >= min_clarity_score (default 7)
+    - lay_audience_relevance >= min_lay_relevance (default 6) - filters medical pro content
     - emotional_hook != "none" (if require_emotional_hook is True)
     - Has at least one key number for STUDY_STAT archetype
     - Has real-world consequence
+    - HUMAN_INTEREST must have actionable lesson
+    - NEWS_POLICY must have controversy potential (moderate or high)
 
     Args:
         spine: NarrativeSpine to check
         min_clarity_score: Minimum clarity score (default 7)
+        min_lay_relevance: Minimum lay audience relevance (default 6)
         require_emotional_hook: Whether to require emotional hook
 
     Returns:
@@ -558,6 +563,16 @@ def check_narrative_quality(
         return NarrativeQualityResult(
             passed=False,
             reason=f"clarity_too_low: {spine.standalone_clarity_score} < {min_clarity_score}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # Check lay audience relevance (reject medical professional content)
+    lay_relevance = getattr(spine, 'lay_audience_relevance', 10)  # Default 10 for backward compat
+    if lay_relevance < min_lay_relevance:
+        return NarrativeQualityResult(
+            passed=False,
+            reason=f"not_relevant_to_lay_audience: {lay_relevance}/10 < {min_lay_relevance}",
             clarity_score=spine.standalone_clarity_score,
             emotional_hook=spine.emotional_hook,
         )
@@ -600,6 +615,26 @@ def check_narrative_quality(
         return NarrativeQualityResult(
             passed=False,
             reason=f"admin_sludge: {sludge_match}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # HUMAN_INTEREST must have actionable lesson
+    actionable_lesson = getattr(spine, 'actionable_lesson', '')
+    if spine.content_archetype == "HUMAN_INTEREST" and not actionable_lesson:
+        return NarrativeQualityResult(
+            passed=False,
+            reason="human_interest_without_actionable_lesson",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # NEWS_POLICY must have controversy potential
+    controversy = getattr(spine, 'controversy_potential', 'none')
+    if spine.content_archetype == "NEWS_POLICY" and controversy in ("none", "low"):
+        return NarrativeQualityResult(
+            passed=False,
+            reason=f"news_policy_not_viral_enough: controversy={controversy}",
             clarity_score=spine.standalone_clarity_score,
             emotional_hook=spine.emotional_hook,
         )
@@ -736,19 +771,23 @@ class ArchetypeDiversityEnforcer:
     """
     Enforces output diversity by archetype.
 
-    Prevents too many STUDY_STAT items in a single run.
+    Prioritizes actionable archetypes (SIMPLE_HABIT, WARNING_RISK, IF_THEN).
+    No longer caps STUDY_STAT - instead prioritizes actionable content.
     """
+
+    # Actionable archetypes that should be prioritized
+    ACTIONABLE_ARCHETYPES = {"SIMPLE_HABIT", "WARNING_RISK", "IF_THEN"}
 
     def __init__(
         self,
-        max_study_stat: int = 2,
-        max_per_archetype: int = 3,
+        max_study_stat: int = 10,  # Effectively no limit
+        max_per_archetype: int = 5,  # Generous limit
     ):
         """
         Initialize enforcer.
 
         Args:
-            max_study_stat: Maximum STUDY_STAT items per run
+            max_study_stat: Maximum STUDY_STAT items per run (no longer enforced strictly)
             max_per_archetype: Maximum items per any archetype
         """
         self.max_study_stat = max_study_stat
@@ -767,11 +806,7 @@ class ArchetypeDiversityEnforcer:
         """
         current_count = self.archetype_counts.get(archetype, 0)
 
-        # Special limit for STUDY_STAT
-        if archetype == "STUDY_STAT" and current_count >= self.max_study_stat:
-            return False, f"max_study_stat_reached ({self.max_study_stat})"
-
-        # General archetype limit
+        # General archetype limit (generous)
         if current_count >= self.max_per_archetype:
             return False, f"max_archetype_reached ({self.max_per_archetype})"
 
@@ -788,3 +823,33 @@ class ArchetypeDiversityEnforcer:
     def reset(self) -> None:
         """Reset counts for a new run."""
         self.archetype_counts = {}
+
+    @classmethod
+    def is_actionable_archetype(cls, archetype: str) -> bool:
+        """Check if archetype is an actionable type (prioritized)."""
+        return archetype in cls.ACTIONABLE_ARCHETYPES
+
+    @classmethod
+    def sort_by_priority(cls, items_with_spines: list) -> list:
+        """
+        Sort items to prioritize actionable archetypes.
+
+        Items with actionable archetypes (SIMPLE_HABIT, WARNING_RISK, IF_THEN)
+        come first, followed by other archetypes sorted by clarity score.
+
+        Args:
+            items_with_spines: List of (item, spine, ...) tuples
+
+        Returns:
+            Sorted list with actionable content first
+        """
+        def sort_key(item_tuple):
+            spine = item_tuple[1]
+            archetype = spine.content_archetype
+            is_actionable = archetype in cls.ACTIONABLE_ARCHETYPES
+
+            # Primary: actionable first (0 for actionable, 1 for not)
+            # Secondary: clarity score descending
+            return (0 if is_actionable else 1, -spine.standalone_clarity_score)
+
+        return sorted(items_with_spines, key=sort_key)
