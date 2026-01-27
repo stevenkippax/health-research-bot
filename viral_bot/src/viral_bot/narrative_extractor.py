@@ -219,147 +219,40 @@ class NarrativeSpine:
         )
 
 
-NARRATIVE_EXTRACTION_PROMPT = """You are a story structure analyst for a quasi-scientific health Instagram account that gives ACTIONABLE advice.
+NARRATIVE_EXTRACTION_PROMPT = """Extract narrative elements for an Instagram health account that gives ACTIONABLE advice.
 
-Your job is to extract the NARRATIVE SPINE from health/science articles - the core elements that make a story shareable.
+GOAL: "Do X to ease Y", "Eat X for Y effect", "Avoid X because Y" format content.
+AUDIENCE: Regular people wanting practical health tips, NOT medical professionals.
 
-TARGET AUDIENCE: Health-conscious adults on Instagram who want:
-- ACTIONABLE health insights they can use TODAY
-- "Do X to ease symptom Y" style advice
-- "Eat X to cause Y effect" style tips
-- Warnings like "Eating X causes Y bad effect" or "Doing X causes Y bad effect"
-- Surprising statistics and counterintuitive findings
-- Care about longevity, nutrition, exercise, sleep, mental health
+EXTRACT:
+1. HOOK: One surprising attention-grabber with numbers. NOT vague like "study examined".
+2. KEY_NUMBERS: All specific stats (%, years, sample sizes, effect sizes).
+3. WHO_IT_APPLIES_TO: Specific population, not "people".
+4. TIME_WINDOW: Duration/timeframe of effect.
+5. MECHANISM_OR_WHY: One sentence on causation.
+6. REAL_WORLD_CONSEQUENCE: Plain language impact on daily life.
+7. STANDALONE_CLARITY_SCORE (1-10): 10=crystal clear to anyone, 1=needs full paper.
+8. EMOTIONAL_HOOK: fear/hope/surprise/validation/curiosity/outrage/none
+9. CONTENT_ARCHETYPE (prioritize actionable):
+   - SIMPLE_HABIT: "Do X to get Y" - PRIORITIZE
+   - WARNING_RISK: "X causes Y bad effect" - PRIORITIZE
+   - IF_THEN: "If X then Y" - PRIORITIZE
+   - STUDY_STAT: Research finding with numbers
+   - COUNTERINTUITIVE: Surprising findings
+   - HUMAN_INTEREST: Personal story (needs actionable_lesson)
+   - NEWS_POLICY: Policy change (needs high controversy_potential)
+10. SUPPORT_LEVEL: strong/moderate/emerging/preliminary
+11. IS_ACTIONABLE: Can regular people act on this?
+    TRUE: eat/avoid something, exercise, change habit
+    FALSE: spending trends, lifestyle observations, medical-pro only, requires Rx
+12. LAY_AUDIENCE_RELEVANCE (1-10): 10=perfect actionable advice, 1=only for doctors.
+    REJECT <6: clinical thresholds, spending trends, diagnostic info.
+13. ACTIONABLE_LESSON: For HUMAN_INTEREST only - what action can readers take? Empty if none.
+14. CONTROVERSY_POTENTIAL: For NEWS_POLICY only - high/moderate/low/none. Reject low/none.
 
-PRIORITIZE content that tells people WHAT TO DO or WHAT TO AVOID.
-This is NOT a medical journal - it's for regular people who want practical advice.
+REJECT: spending habits, lifestyle trends, medical-pro content, product recalls, geographic-specific advice.
 
-EXTRACTION TASK:
-Read the article and extract these elements:
-
-1. HOOK: What's the ONE surprising or attention-grabbing thing? (1-2 sentences max)
-   - BEST: "Eating 2 servings of fermented foods daily reduces inflammation by 34%"
-   - GOOD: "Eating cheese daily was linked to 13% lower heart disease risk"
-   - BAD: "A study examined cheese consumption and cardiovascular outcomes"
-
-2. KEY_NUMBERS: Extract ALL specific numbers that make this concrete
-   - Include: percentages, years, sample sizes, effect sizes, durations
-   - Format: ["27% reduction", "3.7 years longer life expectancy", "n=50,000"]
-
-3. WHO_IT_APPLIES_TO: Be specific about the population
-   - Good: "adults over 65 with pre-diabetes"
-   - Bad: "people" or "participants"
-
-4. TIME_WINDOW: Duration or time frame
-   - Include study duration, effect onset, how long to see results
-   - Good: "after 10-year follow-up", "within 6 weeks of starting"
-
-5. MECHANISM_OR_WHY: Brief causation (1 sentence)
-   - What's the biological/behavioral explanation?
-
-6. REAL_WORLD_CONSEQUENCE: Plain language impact
-   - What does this actually mean for someone's life?
-   - Good: "You could add nearly 4 years to your life"
-   - Bad: "Statistical significance was observed"
-
-7. STANDALONE_CLARITY_SCORE (1-10):
-   How clear is this story to someone with NO context?
-   - 10: Crystal clear, anyone understands immediately
-   - 7: Clear enough, might need minor background
-   - 4: Confusing, requires domain knowledge
-   - 1: Incomprehensible without the full paper
-
-8. EMOTIONAL_HOOK: What drives engagement?
-   - fear: Danger, risk, warning (e.g., "this common food causes...")
-   - hope: Promise, cure, breakthrough (e.g., "new treatment reverses...")
-   - surprise: Counterintuitive (e.g., "chocolate actually helps...")
-   - validation: Confirms beliefs (e.g., "coffee really is good for you")
-   - curiosity: Mystery (e.g., "scientists finally know why...")
-   - outrage: Injustice (e.g., "hidden chemicals in...")
-   - none: No strong emotional angle
-
-9. CONTENT_ARCHETYPE: Best format for this story (PRIORITIZE actionable types)
-   - SIMPLE_HABIT: Easy actionable advice ("Do X to get Y") - PRIORITIZE THIS
-   - WARNING_RISK: Health warning ("Eating/Doing X causes Y bad effect") - PRIORITIZE THIS
-   - IF_THEN: Conditional relationship ("If you do X, then Y happens") - PRIORITIZE THIS
-   - STUDY_STAT: Research finding with compelling numbers
-   - COUNTERINTUITIVE: Surprising, goes against common belief
-   - HUMAN_INTEREST: Personal story (ONLY if it has a clear actionable lesson)
-   - NEWS_POLICY: Policy change (ONLY if controversial/viral potential)
-
-10. SUPPORT_LEVEL: Evidence strength
-    - strong: Large RCT, meta-analysis, replicated findings
-    - moderate: Good cohort study, multiple smaller studies
-    - emerging: Single study, promising but early
-    - preliminary: Very early, animal/cell studies, preprint
-
-11. IS_ACTIONABLE: Can regular people do something with this to improve their health?
-    TRUE if people can: eat something, avoid something, do an exercise, change a habit, ask their doctor something specific
-    FALSE if it's:
-    - Purely informational with no health action
-    - Only relevant to medical professionals
-    - Requires prescription/surgery
-    - About spending habits or costs (e.g., "people spend £2,000 on fitness events")
-    - Lifestyle trends without health advice (e.g., "Gen Z prefers X over Y")
-    - Observational data about behavior (e.g., "millennials are doing X")
-
-    EXAMPLES OF NOT ACTIONABLE (is_actionable = FALSE):
-    - "Young millennials spend £2,000 per Hyrox event" (spending data, not health advice)
-    - "Gen Z prioritizes fitness over leisure" (trend observation, no action)
-    - "Americans are eating more protein than ever" (observational, no advice)
-    - "Healthcare costs are rising" (economic, not health action)
-
-    EXAMPLES OF ACTIONABLE (is_actionable = TRUE):
-    - "Eating bamboo shoots promotes gut health" (eat this food)
-    - "Walking 20 minutes daily reduces heart disease" (do this exercise)
-    - "Avoid processed meats to reduce cancer risk" (avoid this food)
-
-12. LAY_AUDIENCE_RELEVANCE (1-10): Is this useful for REGULAR PEOPLE's health decisions?
-    - 10: Perfect actionable health advice - "eat X to improve Y"
-    - 8: Very relevant - practical health advice for everyday people
-    - 6: Moderately relevant - interesting health finding but limited practical use
-    - 4: Low relevance - spending data, lifestyle trends, or professional content
-    - 2: Only for researchers/doctors - diagnostic thresholds, clinical guidelines
-    - 1: Not health advice at all - economic trends, spending habits, lifestyle observations
-
-    REJECT if < 6. Examples of LOW relevance (score 1-4):
-    - "Lowering blood detection threshold to 80 micrograms" (clinical guideline) = 2
-    - "Mismatch between two blood tests signals kidney failure" (diagnostic) = 2
-    - "New surgical technique improves outcomes" (patients can't act) = 3
-    - "Millennials spending £2,000 on Hyrox events" (spending trend, NOT health) = 1
-    - "Gen Z prioritizes fitness over leisure" (lifestyle observation) = 2
-    - "Americans eating more plant-based foods" (trend, no specific advice) = 3
-
-    Examples of HIGH relevance (score 8-10):
-    - "Eating bamboo shoots promotes beneficial gut bacteria" = 10
-    - "Walking 20 minutes after meals reduces blood sugar by 22%" = 10
-    - "Processed foods with preservatives linked to 14% higher cancer risk" = 9
-
-13. ACTIONABLE_LESSON (for HUMAN_INTEREST only):
-    If this is a personal story, what SPECIFIC action can readers take?
-    - Good: "Get suspicious moles checked immediately - delayed diagnosis cost her years"
-    - Good: "Trust your instincts and push for tests if symptoms persist"
-    - Leave EMPTY if there's no actionable lesson - the story will be rejected
-
-14. CONTROVERSY_POTENTIAL (for NEWS_POLICY only):
-    Does this have viral controversy potential?
-    - high: Sparks debate, polarizing (e.g., "Spain gives paid sick leave for period pains")
-    - moderate: Interesting policy, some discussion potential
-    - low: Routine announcement, no real engagement driver
-    - none: Not a news/policy story
-
-    NEWS_POLICY with "low" or "none" will be REJECTED as not viral enough.
-
-IMPORTANT RULES:
-- PRIORITIZE actionable content: SIMPLE_HABIT, WARNING_RISK, IF_THEN
-- REJECT content only useful to medical professionals (lay_audience_relevance < 6)
-- REJECT HUMAN_INTEREST without actionable lessons
-- REJECT NEWS_POLICY without controversy potential
-- Extract ONLY what's in the article - don't add information
-- If numbers aren't specific, note that in extraction_notes
-- "Admin sludge" (budget approvals, org changes) should get low relevance scores
-
-ARTICLE TO ANALYZE:
+ARTICLE:
 """
 
 

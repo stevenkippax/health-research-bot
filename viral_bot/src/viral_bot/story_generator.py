@@ -93,74 +93,25 @@ def sanitize_headline(headline: str) -> str:
 # STORY COMPRESSION PROMPT
 # =====================================================
 
-STORY_COMPRESSION_SYSTEM = """You are a story compressor for a quasi-scientific health Instagram account that gives ACTIONABLE advice.
+STORY_COMPRESSION_SYSTEM = """Compress narrative into Instagram slide text for an actionable health account.
 
-Your job is to take structured narrative elements and compress them into shareable slide text that helps people take action.
+FORMATS (priority order):
+1. "Do X to improve Y": "Walking 20min daily reduces heart disease risk by 31%"
+2. "Eat X for Y effect": "Low-glycemic foods reduce dementia risk by 16%"
+3. "X causes Y bad effect": "Sitting 8+ hours daily increases diabetes risk by 90%"
 
-THIS IS A BRAND THAT GIVES:
-- Actionable advice to followers
-- Warnings about health risks
-- A sprinkle of breakthroughs and health AI developments
-
-PRIORITIZE THESE FORMATS (in order of preference):
-
-1. "Do X to ease/improve Y" format:
-   - "Walking just 20 minutes daily reduces heart disease risk by 31%"
-   - "Eating 2 servings of fermented foods daily lowers inflammation by 34%"
-
-2. "Eat X to cause Y effect" format:
-   - "Eating low-glycemic foods like fruits and whole grains can reduce dementia risk by 16%"
-   - "Consuming olive oil daily linked to 28% lower risk of death from all causes"
-
-3. "Eating/Doing X causes Y bad effect" (warnings):
-   - "Consuming processed foods with preservatives like potassium sorbate linked to 14% higher cancer risk"
-   - "Sitting for more than 8 hours daily increases diabetes risk by 90%"
-   - "Ultra-processed foods increase depression risk by 33%"
-
-OUTPUT FORMAT: Complete statements that stand alone
-- NOT clickbait ("You won't believe...")
-- NOT questions ("Did you know...?")
-- NOT source labels ("Harvard study:", "New research:")
-
-IDEAL OUTPUT STRUCTURE:
-[Action/Food/Habit] + [Specific amount/frequency] + [Effect with numbers] + [Who it applies to if specific]
-
-EXCELLENT EXAMPLES:
-1. "Consuming processed foods with preservatives like potassium sorbate linked to 14% higher cancer risk over 7.5 years... potentially increasing prostate cancer risk by 32%."
-
-2. "Eating low-glycemic foods like fruits and whole grains can reduce dementia risk by 16%, supporting long-term brain health."
-
-3. "Adults who sleep less than 6 hours per night have a 27% higher risk of atherosclerosis, even if they exercise regularly and eat well."
-
-4. "Deli ham is officially classified as a Group 1 carcinogen by the WHO... the same group as tobacco and asbestos."
-
-5. "People who eat fermented foods 5+ times per week have measurably lower inflammation markers and 34% fewer sick days."
-
-6. "Taking a 10-minute walk after meals reduces blood sugar spikes by up to 22%."
-
-BAD EXAMPLES (DO NOT DO):
-- "New study reveals surprising findings about sleep" (no specifics)
-- "Scientists discover link between diet and health" (too vague)
-- "You won't believe what researchers found about exercise!" (clickbait)
-- "Study: Exercise is good for you" (boring, uses "Study:" prefix)
-- "Harvard research shows health benefits" (no numbers, vague)
-- "Lowering the blood detection threshold to 80 micrograms..." (too technical for lay audience)
-- "A mismatch between two common blood tests can signal..." (diagnostic info for doctors, not actionable)
+STRUCTURE: [Action/Food] + [Amount/Frequency] + [Effect with number] + [Who if specific]
 
 RULES:
-1. MUST include at least one specific number from key_numbers
-2. MUST be actionable or a clear warning for regular people
-3. MUST include the real-world consequence in plain language
-4. Use ellipses (...) for dramatic pause before the punchline
-5. NO source label prefixes (no "Study:", "Research:", "According to...")
-6. NO exclamation marks
-7. 1-3 sentences maximum
-8. Plain language - avoid medical jargon
-9. Use "linked to" or "associated with" for correlational findings
-10. Complete, standalone statements that make sense without context
-11. Focus on WHAT PEOPLE CAN DO or WHAT THEY SHOULD AVOID
+- Include specific number from key_numbers
+- Plain language, no jargon
+- 1-3 sentences, use ellipses (...) for dramatic pause
+- NO source prefixes ("Study:", "Harvard:")
+- NO clickbait, questions, or exclamation marks
+- Use "linked to" for correlational findings
+- Focus on WHAT TO DO or AVOID
 
-IMPORTANT: Return ONLY valid JSON."""
+Return valid JSON only."""
 
 
 # Pydantic model for structured output
@@ -236,44 +187,14 @@ class StoryCompressionResult:
 def build_compression_prompt(spine: NarrativeSpine, item: NormalizedItem) -> str:
     """Build the user prompt for story compression."""
 
-    numbers_str = "\n".join([f"  - {num}" for num in spine.key_numbers]) if spine.key_numbers else "  (none extracted)"
+    numbers_str = ", ".join(spine.key_numbers) if spine.key_numbers else "(none)"
 
-    return f"""Compress this narrative into Instagram slide text:
-
-HOOK: {spine.hook}
-
-KEY NUMBERS (must include at least one):
-{numbers_str}
-
-WHO IT APPLIES TO: {spine.who_it_applies_to}
-
-TIME WINDOW: {spine.time_window}
-
-MECHANISM: {spine.mechanism_or_why}
-
-REAL-WORLD CONSEQUENCE: {spine.real_world_consequence}
-
-EMOTIONAL HOOK: {spine.emotional_hook}
-CONTENT ARCHETYPE: {spine.content_archetype}
-SUPPORT LEVEL: {spine.support_level}
-
-SOURCE NAME: {item.source_name}
-CREDIBILITY TIER: {item.credibility_tier.value}
-
-Return JSON:
-{{
-  "headline": "Your compressed slide text here (1-3 sentences, include numbers)",
-  "highlight_words": ["word1", "number1", "impact_word"],
-  "image_suggestion": "Concrete visual concept",
-  "layout_notes": ["note1", "note2"],
-  "generation_notes": "Any notes"
-}}
-
-REMINDER:
-- Include at least ONE number from key_numbers
-- NO source prefixes ("Study:", "Research:", etc.)
-- Complete statement that stands alone
-- Ellipses (...) for dramatic effect before punchline"""
+    return f"""HOOK: {spine.hook}
+NUMBERS: {numbers_str}
+WHO: {spine.who_it_applies_to}
+TIME: {spine.time_window}
+CONSEQUENCE: {spine.real_world_consequence}
+ARCHETYPE: {spine.content_archetype}"""
 
 
 class StoryCompressor:
