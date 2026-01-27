@@ -13,6 +13,9 @@ Output schema:
 - real_world_consequence: What this means for people's lives
 - standalone_clarity_score: 1-10, how clear is this without context?
 - emotional_hook: fear/hope/surprise/validation/curiosity/outrage/none
+- lay_audience_relevance: 1-10, is this useful for regular people (not medical pros)?
+- actionable_lesson: For human interest stories, what can people learn/do?
+- controversy_potential: For news/policy, is this controversial/viral?
 """
 
 import json
@@ -99,6 +102,21 @@ class NarrativeSpineResponse(BaseModel):
         description="Can regular people act on this information?"
     )
 
+    lay_audience_relevance: int = Field(
+        ge=1, le=10,
+        description="1-10: How relevant is this to regular people (not medical professionals)? 10 = perfect for Instagram health audience, 1 = only useful for doctors/researchers"
+    )
+
+    actionable_lesson: str = Field(
+        default="",
+        description="For HUMAN_INTEREST stories: What specific action can readers take based on this story? (e.g., 'Get suspicious moles checked early'). Leave empty if not a human interest story."
+    )
+
+    controversy_potential: Literal["high", "moderate", "low", "none"] = Field(
+        default="none",
+        description="For NEWS_POLICY: Does this have viral controversy potential? High = sparks debate (like paid period leave), Moderate = interesting policy, Low = routine announcement, None = not applicable"
+    )
+
     extraction_notes: str = Field(
         default="",
         description="Any caveats or notes about extraction quality"
@@ -119,6 +137,9 @@ class NarrativeSpine:
     content_archetype: str = "STUDY_STAT"
     support_level: str = "moderate"
     is_actionable: bool = False
+    lay_audience_relevance: int = 5  # NEW: 1-10 score for lay audience
+    actionable_lesson: str = ""  # NEW: For HUMAN_INTEREST stories
+    controversy_potential: str = "none"  # NEW: For NEWS_POLICY stories
     extraction_notes: str = ""
 
     # Quality gates
@@ -137,6 +158,15 @@ class NarrativeSpine:
         # Must have real-world consequence
         if not self.real_world_consequence or len(self.real_world_consequence) < 10:
             return False
+        # Must be relevant to lay audience (not medical professionals)
+        if self.lay_audience_relevance < 6:
+            return False
+        # HUMAN_INTEREST must have actionable lesson
+        if self.content_archetype == "HUMAN_INTEREST" and not self.actionable_lesson:
+            return False
+        # NEWS_POLICY must have some controversy potential to be viral
+        if self.content_archetype == "NEWS_POLICY" and self.controversy_potential in ("none", "low"):
+            return False
         return True
 
     @property
@@ -150,7 +180,18 @@ class NarrativeSpine:
             return "STUDY_STAT without key numbers"
         if not self.real_world_consequence or len(self.real_world_consequence) < 10:
             return "missing real-world consequence"
+        if self.lay_audience_relevance < 6:
+            return f"not_relevant_to_lay_audience ({self.lay_audience_relevance}/10)"
+        if self.content_archetype == "HUMAN_INTEREST" and not self.actionable_lesson:
+            return "human_interest_without_actionable_lesson"
+        if self.content_archetype == "NEWS_POLICY" and self.controversy_potential in ("none", "low"):
+            return f"news_policy_not_viral_enough (controversy: {self.controversy_potential})"
         return None
+
+    @property
+    def is_actionable_archetype(self) -> bool:
+        """Check if this is an actionable archetype (prioritized)."""
+        return self.content_archetype in ("SIMPLE_HABIT", "WARNING_RISK", "IF_THEN")
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -171,26 +212,35 @@ class NarrativeSpine:
             content_archetype=response.content_archetype,
             support_level=response.support_level,
             is_actionable=response.is_actionable,
+            lay_audience_relevance=response.lay_audience_relevance,
+            actionable_lesson=response.actionable_lesson,
+            controversy_potential=response.controversy_potential,
             extraction_notes=response.extraction_notes,
         )
 
 
-NARRATIVE_EXTRACTION_PROMPT = """You are a story structure analyst for a health science Instagram account.
+NARRATIVE_EXTRACTION_PROMPT = """You are a story structure analyst for a quasi-scientific health Instagram account that gives ACTIONABLE advice.
 
 Your job is to extract the NARRATIVE SPINE from health/science articles - the core elements that make a story shareable.
 
-TARGET AUDIENCE: Health-conscious adults on Instagram who:
-- Want actionable health insights
-- Love surprising statistics and counterintuitive findings
+TARGET AUDIENCE: Health-conscious adults on Instagram who want:
+- ACTIONABLE health insights they can use TODAY
+- "Do X to ease symptom Y" style advice
+- "Eat X to cause Y effect" style tips
+- Warnings like "Eating X causes Y bad effect" or "Doing X causes Y bad effect"
+- Surprising statistics and counterintuitive findings
 - Care about longevity, nutrition, exercise, sleep, mental health
-- Scroll quickly - you have 2 seconds to grab attention
+
+PRIORITIZE content that tells people WHAT TO DO or WHAT TO AVOID.
+This is NOT a medical journal - it's for regular people who want practical advice.
 
 EXTRACTION TASK:
 Read the article and extract these elements:
 
 1. HOOK: What's the ONE surprising or attention-grabbing thing? (1-2 sentences max)
-   - Good: "Eating cheese daily was linked to 13% lower heart disease risk"
-   - Bad: "A study examined cheese consumption and cardiovascular outcomes"
+   - BEST: "Eating 2 servings of fermented foods daily reduces inflammation by 34%"
+   - GOOD: "Eating cheese daily was linked to 13% lower heart disease risk"
+   - BAD: "A study examined cheese consumption and cardiovascular outcomes"
 
 2. KEY_NUMBERS: Extract ALL specific numbers that make this concrete
    - Include: percentages, years, sample sizes, effect sizes, durations
@@ -228,14 +278,14 @@ Read the article and extract these elements:
    - outrage: Injustice (e.g., "hidden chemicals in...")
    - none: No strong emotional angle
 
-9. CONTENT_ARCHETYPE: Best format for this story
+9. CONTENT_ARCHETYPE: Best format for this story (PRIORITIZE actionable types)
+   - SIMPLE_HABIT: Easy actionable advice ("Do X to get Y") - PRIORITIZE THIS
+   - WARNING_RISK: Health warning ("Eating/Doing X causes Y bad effect") - PRIORITIZE THIS
+   - IF_THEN: Conditional relationship ("If you do X, then Y happens") - PRIORITIZE THIS
    - STUDY_STAT: Research finding with compelling numbers
-   - WARNING_RISK: Health warning or danger alert
-   - SIMPLE_HABIT: Easy actionable advice
-   - IF_THEN: Conditional relationship (if you do X, then Y happens)
    - COUNTERINTUITIVE: Surprising, goes against common belief
-   - HUMAN_INTEREST: Personal story or case study
-   - NEWS_POLICY: Policy change, approval, announcement
+   - HUMAN_INTEREST: Personal story (ONLY if it has a clear actionable lesson)
+   - NEWS_POLICY: Policy change (ONLY if controversial/viral potential)
 
 10. SUPPORT_LEVEL: Evidence strength
     - strong: Large RCT, meta-analysis, replicated findings
@@ -244,13 +294,45 @@ Read the article and extract these elements:
     - preliminary: Very early, animal/cell studies, preprint
 
 11. IS_ACTIONABLE: Can regular people do something with this?
+    TRUE if people can: eat something, avoid something, do an exercise, change a habit, ask their doctor something specific
+    FALSE if it's: purely informational, only relevant to medical professionals, requires prescription/surgery
+
+12. LAY_AUDIENCE_RELEVANCE (1-10): Is this useful for REGULAR PEOPLE (not doctors/researchers)?
+    - 10: Perfect for Instagram health audience - anyone can understand and use this
+    - 8: Very relevant - practical advice for everyday people
+    - 6: Moderately relevant - interesting but limited practical application
+    - 4: Mostly for medical professionals - uses jargon, about treatments they can't access
+    - 2: Only for researchers/doctors - diagnostic thresholds, clinical guidelines, lab findings
+    - 1: Pure medical/scientific content with no lay relevance
+
+    REJECT if < 6. Examples of LOW relevance:
+    - "Lowering blood detection threshold to 80 micrograms" (clinical guideline)
+    - "Mismatch between two blood tests signals kidney failure" (diagnostic for doctors)
+    - "New surgical technique improves outcomes" (patients can't act on this)
+
+13. ACTIONABLE_LESSON (for HUMAN_INTEREST only):
+    If this is a personal story, what SPECIFIC action can readers take?
+    - Good: "Get suspicious moles checked immediately - delayed diagnosis cost her years"
+    - Good: "Trust your instincts and push for tests if symptoms persist"
+    - Leave EMPTY if there's no actionable lesson - the story will be rejected
+
+14. CONTROVERSY_POTENTIAL (for NEWS_POLICY only):
+    Does this have viral controversy potential?
+    - high: Sparks debate, polarizing (e.g., "Spain gives paid sick leave for period pains")
+    - moderate: Interesting policy, some discussion potential
+    - low: Routine announcement, no real engagement driver
+    - none: Not a news/policy story
+
+    NEWS_POLICY with "low" or "none" will be REJECTED as not viral enough.
 
 IMPORTANT RULES:
+- PRIORITIZE actionable content: SIMPLE_HABIT, WARNING_RISK, IF_THEN
+- REJECT content only useful to medical professionals (lay_audience_relevance < 6)
+- REJECT HUMAN_INTEREST without actionable lessons
+- REJECT NEWS_POLICY without controversy potential
 - Extract ONLY what's in the article - don't add information
 - If numbers aren't specific, note that in extraction_notes
-- If the story is about policy/admin (not health impact), score clarity lower
-- "Admin sludge" (budget approvals, org changes) should get low clarity scores
-- Always prefer the most specific, surprising interpretation
+- "Admin sludge" (budget approvals, org changes) should get low relevance scores
 
 ARTICLE TO ANALYZE:
 """
