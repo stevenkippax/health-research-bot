@@ -293,22 +293,47 @@ Read the article and extract these elements:
     - emerging: Single study, promising but early
     - preliminary: Very early, animal/cell studies, preprint
 
-11. IS_ACTIONABLE: Can regular people do something with this?
+11. IS_ACTIONABLE: Can regular people do something with this to improve their health?
     TRUE if people can: eat something, avoid something, do an exercise, change a habit, ask their doctor something specific
-    FALSE if it's: purely informational, only relevant to medical professionals, requires prescription/surgery
+    FALSE if it's:
+    - Purely informational with no health action
+    - Only relevant to medical professionals
+    - Requires prescription/surgery
+    - About spending habits or costs (e.g., "people spend £2,000 on fitness events")
+    - Lifestyle trends without health advice (e.g., "Gen Z prefers X over Y")
+    - Observational data about behavior (e.g., "millennials are doing X")
 
-12. LAY_AUDIENCE_RELEVANCE (1-10): Is this useful for REGULAR PEOPLE (not doctors/researchers)?
-    - 10: Perfect for Instagram health audience - anyone can understand and use this
-    - 8: Very relevant - practical advice for everyday people
-    - 6: Moderately relevant - interesting but limited practical application
-    - 4: Mostly for medical professionals - uses jargon, about treatments they can't access
-    - 2: Only for researchers/doctors - diagnostic thresholds, clinical guidelines, lab findings
-    - 1: Pure medical/scientific content with no lay relevance
+    EXAMPLES OF NOT ACTIONABLE (is_actionable = FALSE):
+    - "Young millennials spend £2,000 per Hyrox event" (spending data, not health advice)
+    - "Gen Z prioritizes fitness over leisure" (trend observation, no action)
+    - "Americans are eating more protein than ever" (observational, no advice)
+    - "Healthcare costs are rising" (economic, not health action)
 
-    REJECT if < 6. Examples of LOW relevance:
-    - "Lowering blood detection threshold to 80 micrograms" (clinical guideline)
-    - "Mismatch between two blood tests signals kidney failure" (diagnostic for doctors)
-    - "New surgical technique improves outcomes" (patients can't act on this)
+    EXAMPLES OF ACTIONABLE (is_actionable = TRUE):
+    - "Eating bamboo shoots promotes gut health" (eat this food)
+    - "Walking 20 minutes daily reduces heart disease" (do this exercise)
+    - "Avoid processed meats to reduce cancer risk" (avoid this food)
+
+12. LAY_AUDIENCE_RELEVANCE (1-10): Is this useful for REGULAR PEOPLE's health decisions?
+    - 10: Perfect actionable health advice - "eat X to improve Y"
+    - 8: Very relevant - practical health advice for everyday people
+    - 6: Moderately relevant - interesting health finding but limited practical use
+    - 4: Low relevance - spending data, lifestyle trends, or professional content
+    - 2: Only for researchers/doctors - diagnostic thresholds, clinical guidelines
+    - 1: Not health advice at all - economic trends, spending habits, lifestyle observations
+
+    REJECT if < 6. Examples of LOW relevance (score 1-4):
+    - "Lowering blood detection threshold to 80 micrograms" (clinical guideline) = 2
+    - "Mismatch between two blood tests signals kidney failure" (diagnostic) = 2
+    - "New surgical technique improves outcomes" (patients can't act) = 3
+    - "Millennials spending £2,000 on Hyrox events" (spending trend, NOT health) = 1
+    - "Gen Z prioritizes fitness over leisure" (lifestyle observation) = 2
+    - "Americans eating more plant-based foods" (trend, no specific advice) = 3
+
+    Examples of HIGH relevance (score 8-10):
+    - "Eating bamboo shoots promotes beneficial gut bacteria" = 10
+    - "Walking 20 minutes after meals reduces blood sugar by 22%" = 10
+    - "Processed foods with preservatives linked to 14% higher cancer risk" = 9
 
 13. ACTIONABLE_LESSON (for HUMAN_INTEREST only):
     If this is a personal story, what SPECIFIC action can readers take?

@@ -498,6 +498,22 @@ ADMIN_SLUDGE_PATTERNS = [
 
 _ADMIN_SLUDGE_PATTERNS = [re.compile(p, re.IGNORECASE) for p in ADMIN_SLUDGE_PATTERNS]
 
+# Spending/lifestyle trend patterns (NOT actionable health advice)
+LIFESTYLE_TREND_PATTERNS = [
+    r"(?:spending|spend|spent)\s+(?:up\s+to\s+)?[£$€]\d+",  # "spending £2,000"
+    r"(?:millennials?|gen\s*z|boomers?|generation)\s+(?:are\s+)?(?:spending|prioritiz)",  # "Gen Z spending"
+    r"(?:prioritiz(?:e|ing|es?))\s+(?:\w+\s+)?over\s+",  # "prioritizing X over Y"
+    r"(?:fitness|wellness)\s+(?:industry|market|trend|boom)",  # industry trends
+    r"(?:how\s+much|average)\s+(?:\w+\s+)?(?:spend|cost)",  # "how much people spend"
+    r"(?:per\s+event|per\s+session|per\s+class|per\s+month)\s*[£$€]?\d+",  # cost per event
+    r"(?:survey|poll)\s+(?:finds?|shows?|reveals?)\s+(?:\w+\s+)?(?:spending|prefer)",  # survey spending
+    r"hyrox",  # Specific: Hyrox events (fitness competition spending)
+    r"(?:boutique|premium|luxury)\s+(?:fitness|gym|wellness)",  # premium fitness trends
+    r"(?:fitness|gym)\s+(?:membership|subscription)\s+(?:cost|price|fee)",  # membership costs
+]
+
+_LIFESTYLE_TREND_PATTERNS = [re.compile(p, re.IGNORECASE) for p in LIFESTYLE_TREND_PATTERNS]
+
 
 def is_admin_sludge(text: str) -> tuple[bool, Optional[str]]:
     """
@@ -510,6 +526,28 @@ def is_admin_sludge(text: str) -> tuple[bool, Optional[str]]:
         Tuple of (is_sludge, matched_pattern)
     """
     for pattern in _ADMIN_SLUDGE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return True, match.group(0)
+    return False, None
+
+
+def is_lifestyle_trend(text: str) -> tuple[bool, Optional[str]]:
+    """
+    Check if text is about spending/lifestyle trends (not actionable health).
+
+    Examples that should be rejected:
+    - "Young millennials spend £2,000 per Hyrox event"
+    - "Gen Z prioritizes fitness over leisure"
+    - "Premium fitness industry booming"
+
+    Args:
+        text: Title or body text to check
+
+    Returns:
+        Tuple of (is_trend, matched_pattern)
+    """
+    for pattern in _LIFESTYLE_TREND_PATTERNS:
         match = pattern.search(text)
         if match:
             return True, match.group(0)
@@ -615,6 +653,26 @@ def check_narrative_quality(
         return NarrativeQualityResult(
             passed=False,
             reason=f"admin_sludge: {sludge_match}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # Check for lifestyle/spending trends (not actionable health advice)
+    is_trend, trend_match = is_lifestyle_trend(spine.hook)
+    if is_trend:
+        return NarrativeQualityResult(
+            passed=False,
+            reason=f"lifestyle_trend_not_health: {trend_match}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # Also check is_actionable field - reject if explicitly marked as not actionable
+    is_actionable = getattr(spine, 'is_actionable', True)  # Default True for backward compat
+    if not is_actionable:
+        return NarrativeQualityResult(
+            passed=False,
+            reason="not_actionable_content",
             clarity_score=spine.standalone_clarity_score,
             emotional_hook=spine.emotional_hook,
         )
