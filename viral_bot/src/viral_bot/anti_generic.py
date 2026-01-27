@@ -514,6 +514,54 @@ LIFESTYLE_TREND_PATTERNS = [
 
 _LIFESTYLE_TREND_PATTERNS = [re.compile(p, re.IGNORECASE) for p in LIFESTYLE_TREND_PATTERNS]
 
+# Product recall / too-specific patterns (not general health advice)
+TOO_SPECIFIC_PATTERNS = [
+    # Product recalls with specific details
+    r"(?:stop\s+using|recall(?:ed)?|withdraw[n]?)\s+\w+.*(?:batch|lot|expir)",
+    r"(?:batch|lot)\s*(?:number|#|no\.?)?\s*[A-Z0-9-]+",
+    r"expir(?:y|ing|es?)\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}",
+    r"\d+g\s+packs?\s+expiring",
+    # Specific product names with recall context
+    r"(?:formula|milk|food)\s+\d+g\s+(?:packs?|containers?)",
+    # Geographic specificity (not universally applicable)
+    r"(?:in|at)\s+(?:Bradford|Manchester|Leeds|Birmingham|London)\s+(?:mosques?|churches?|temples?|centers?)",
+    r"(?:mosques?|churches?|temples?)\s+(?:in|at|across)\s+[A-Z][a-z]+",
+    r"(?:local|community)\s+(?:mosques?|churches?|centers?)\s+(?:in|at)",
+    # Named individuals (case studies that are too specific)
+    r"like\s+[A-Z][a-z]+\s+[A-Z][a-z]+,?\s+(?:who|diagnosed|aged)",
+    r"[A-Z][a-z]+\s+[A-Z][a-z]+'s\s+(?:cancer|diagnosis|symptoms|story)",
+]
+
+_TOO_SPECIFIC_PATTERNS = [re.compile(p, re.IGNORECASE) for p in TOO_SPECIFIC_PATTERNS]
+
+# Wishy-washy / non-actionable advice patterns
+WISHY_WASHY_PATTERNS = [
+    r"(?:should|must)\s+(?:demand|insist|push\s+for|advocate)",
+    r"(?:focus\s+on|prioritize)\s+(?:\w+\s+){0,2}(?:for|to)\s+",  # "Focus on X for Y"
+    r"(?:be\s+aware|stay\s+informed|keep\s+in\s+mind)",
+    r"(?:consider|think\s+about)\s+(?:your|the)",
+]
+
+_WISHY_WASHY_PATTERNS = [re.compile(p, re.IGNORECASE) for p in WISHY_WASHY_PATTERNS]
+
+
+def is_too_specific(text: str) -> tuple[bool, Optional[str]]:
+    """Check if content is too specific (product recalls, locations, named individuals)."""
+    for pattern in _TOO_SPECIFIC_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return True, match.group(0)
+    return False, None
+
+
+def is_wishy_washy(text: str) -> tuple[bool, Optional[str]]:
+    """Check if advice is wishy-washy (not concrete eat/do/avoid format)."""
+    for pattern in _WISHY_WASHY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return True, match.group(0)
+    return False, None
+
 
 def is_admin_sludge(text: str) -> tuple[bool, Optional[str]]:
     """
@@ -693,6 +741,26 @@ def check_narrative_quality(
         return NarrativeQualityResult(
             passed=False,
             reason=f"news_policy_not_viral_enough: controversy={controversy}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # Check for too-specific content (product recalls, geographic niche, named individuals)
+    too_specific, specific_match = is_too_specific(spine.hook)
+    if too_specific:
+        return NarrativeQualityResult(
+            passed=False,
+            reason=f"too_specific: {specific_match}",
+            clarity_score=spine.standalone_clarity_score,
+            emotional_hook=spine.emotional_hook,
+        )
+
+    # Check for wishy-washy advice (not concrete do/eat/avoid format)
+    wishy, wishy_match = is_wishy_washy(spine.hook)
+    if wishy:
+        return NarrativeQualityResult(
+            passed=False,
+            reason=f"wishy_washy_advice: {wishy_match}",
             clarity_score=spine.standalone_clarity_score,
             emotional_hook=spine.emotional_hook,
         )
