@@ -737,6 +737,21 @@ async def run_v3_pipeline(
             logger.warning("no_items_fetched")
             return stats
 
+        # === STEP 1.5: Deduplicate by URL ===
+        # Same article may appear in multiple feeds (e.g., ScienceDaily Health + Longevity)
+        seen_urls = set()
+        unique_items = []
+        for item in fetched_items:
+            if item.url not in seen_urls:
+                seen_urls.add(item.url)
+                unique_items.append(item)
+            else:
+                logger.debug("v3_duplicate_url_skipped", url=item.url, source=item.source)
+
+        fetched_items = unique_items
+        stats["items_after_url_dedup"] = len(fetched_items)
+        logger.info("v3_url_dedup_complete", before=stats["items_fetched"], after=len(fetched_items))
+
         # === STEP 2: Fetch full content ===
         logger.info("v3_step_2_fetching_full_content")
         normalized_items = await runner.content_fetcher.fetch_batch(

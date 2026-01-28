@@ -63,16 +63,16 @@ Your job is to write ON-IMAGE TEXT that matches our top-performing style. This i
 
 WINNER CORPUS STYLE (you MUST match this):
 - ALL CAPS (always)
-- Templates like: "STUDY SAYS...", "STUDY REVEALS...", "ONE [FOOD] CAN...", "THIS IS THE [BODY PART]...", "IF YOU [ACTION]..."
+- Templates like: "STUDY SAYS", "STUDY REVEALS", "ONE [FOOD] CAN", "THIS IS THE [BODY PART]", "IF YOU [ACTION]"
 - Mini-story compression: hook → numbers/time → outcome
-- Uses "..." (ellipsis) for dramatic pause before the punchline
+- Use commas for pacing and flow, NOT ellipsis (no "...")
 - NO source labels or prefixes (no "Guardian Health:", "Harvard Study:")
 - Self-contained and readable without a caption
 
 EXCELLENT EXAMPLES:
 1. "STUDY SAYS EATING ONE EGG A DAY CAN REDUCE YOUR RISK OF STROKE BY 12%"
-2. "PROCESSED DELI MEATS ARE NOW CLASSIFIED AS GROUP 1 CARCINOGENS BY THE WHO... THE SAME GROUP AS TOBACCO AND ASBESTOS"
-3. "IF YOU WAKE UP BETWEEN 3-5 AM REGULARLY... YOUR LUNGS MAY BE TRYING TO TELL YOU SOMETHING"
+2. "PROCESSED DELI MEATS ARE NOW CLASSIFIED AS GROUP 1 CARCINOGENS BY THE WHO, THE SAME GROUP AS TOBACCO AND ASBESTOS"
+3. "IF YOU WAKE UP BETWEEN 3-5 AM REGULARLY, YOUR LUNGS MAY BE TRYING TO TELL YOU SOMETHING"
 4. "WALKING JUST 11 MINUTES A DAY REDUCES YOUR RISK OF EARLY DEATH BY 23%"
 5. "ONE ALCOHOLIC DRINK A DAY IS NOW LINKED TO A 51% INCREASE IN MOUTH CANCER RISK"
 6. "STUDY REVEALS THAT PEOPLE WHO EAT FERMENTED FOODS 5+ TIMES A WEEK HAVE 34% FEWER SICK DAYS"
@@ -224,9 +224,12 @@ class SlideWriter:
         # Remove exclamation marks
         headline = headline.replace('!', '')
 
-        # Normalize ellipses
-        headline = re.sub(r'\.{2,}', '...', headline)
-        headline = headline.replace('…', '...')
+        # Replace ellipsis with comma (user preference)
+        headline = re.sub(r'\.{2,}', ',', headline)
+        headline = headline.replace('…', ',')
+        # Clean up double commas or comma-space issues
+        headline = re.sub(r',\s*,', ',', headline)
+        headline = re.sub(r'\s+,', ',', headline)
 
         # Clean up whitespace
         headline = ' '.join(headline.split())
