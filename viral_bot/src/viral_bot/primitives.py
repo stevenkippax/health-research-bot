@@ -138,7 +138,7 @@ BODY_PARTS = [
     'brain', 'heart', 'liver', 'kidney', 'gut', 'stomach', 'intestine',
     'lung', 'skin', 'bone', 'muscle', 'joint', 'knee', 'hip', 'back',
     'spine', 'neck', 'shoulder', 'eye', 'ear', 'blood', 'artery', 'vein',
-    'cells?', 'dna', 'genes?', 'mitochondria', 'immune\s+system',
+    'cells?', 'dna', 'genes?', 'mitochondria', r'immune\s+system',
 ]
 BODY_PART_PATTERN = re.compile(r'\b(' + '|'.join(BODY_PARTS) + r')\b', re.IGNORECASE)
 
@@ -147,7 +147,7 @@ SYMPTOMS = [
     'pain', 'ache', 'inflammation', 'swelling', 'fatigue', 'tiredness',
     'anxiety', 'depression', 'stress', 'insomnia', 'headache', 'migraine',
     'nausea', 'bloating', 'constipation', 'diarrhea', 'cramp',
-    'stiffness', 'soreness', 'weakness', 'dizziness', 'brain\s+fog',
+    'stiffness', 'soreness', 'weakness', 'dizziness', r'brain\s+fog',
 ]
 SYMPTOM_PATTERN = re.compile(r'\b(' + '|'.join(SYMPTOMS) + r')\b', re.IGNORECASE)
 
@@ -166,7 +166,7 @@ FOODS = [
     'fish', 'salmon', 'tuna', 'chicken', 'beef', 'pork', 'meat',
     'vegetable', 'fruit', 'apple', 'banana', 'berry', 'blueberry',
     'spinach', 'kale', 'broccoli', 'carrot', 'tomato', 'avocado',
-    'olive\s+oil', 'coconut\s+oil', 'butter', 'nuts?', 'almond', 'walnut',
+    r'olive\s+oil', r'coconut\s+oil', 'butter', 'nuts?', 'almond', 'walnut',
     'rice', 'bread', 'pasta', 'oat', 'quinoa', 'legume', 'bean',
     'garlic', 'onion', 'ginger', 'turmeric', 'cinnamon', 'honey',
     'wine', 'alcohol', 'beer', 'soda', 'juice', 'water',
@@ -177,10 +177,10 @@ FOOD_PATTERN = re.compile(r'\b(' + '|'.join(FOODS) + r')s?\b', re.IGNORECASE)
 # Authorities
 AUTHORITIES = [
     'WHO', 'FDA', 'CDC', 'NIH', 'IARC', 'NHS', 'USDA',
-    'World\s+Health\s+Organization',
-    'Food\s+and\s+Drug\s+Administration',
-    'Centers?\s+for\s+Disease\s+Control',
-    'National\s+Institutes?\s+of\s+Health',
+    r'World\s+Health\s+Organization',
+    r'Food\s+and\s+Drug\s+Administration',
+    r'Centers?\s+for\s+Disease\s+Control',
+    r'National\s+Institutes?\s+of\s+Health',
 ]
 AUTHORITY_PATTERN = re.compile(r'\b(' + '|'.join(AUTHORITIES) + r')\b', re.IGNORECASE)
 
@@ -196,8 +196,8 @@ PARENT_CHILD_PATTERN = re.compile(r'\b(' + '|'.join(PARENT_CHILD_TERMS) + r')\b'
 BIO_MARKERS = [
     'cortisol', 'oxytocin', 'dopamine', 'serotonin', 'melatonin',
     'testosterone', 'estrogen', 'insulin', 'glucose', 'cholesterol',
-    'blood\s+pressure', 'heart\s+rate', 'inflammation', 'cytokine',
-    'telomere', 'epigenetic', 'microbiome', 'gut\s+bacteria',
+    r'blood\s+pressure', r'heart\s+rate', 'inflammation', 'cytokine',
+    'telomere', 'epigenetic', 'microbiome', r'gut\s+bacteria',
 ]
 BIO_MARKER_PATTERN = re.compile(r'\b(' + '|'.join(BIO_MARKERS) + r')\b', re.IGNORECASE)
 
