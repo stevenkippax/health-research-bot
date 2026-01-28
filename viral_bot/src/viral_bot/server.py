@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -219,18 +219,19 @@ async def submit_feedback(request: FeedbackRequest):
 
 
 @app.post("/run", response_model=RunResponse)
-async def trigger_run(background_tasks: BackgroundTasks):
+async def trigger_run():
     """Trigger a manual bot run."""
-    
+
     async def run_in_background():
         try:
             stats = await run_v3_pipeline()
             logger.info("manual_run_completed", stats=stats)
         except Exception as e:
             logger.error("manual_run_failed", error=str(e))
-    
-    background_tasks.add_task(run_in_background)
-    
+
+    # Use asyncio.create_task for proper async execution
+    asyncio.create_task(run_in_background())
+
     return RunResponse(
         run_id="manual_run_triggered",
         status="started",
