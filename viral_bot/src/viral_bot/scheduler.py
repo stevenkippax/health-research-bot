@@ -13,7 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .config import get_settings
 from .logging_conf import get_logger, setup_logging
-from .main import run_bot
+from .main import run_v3_pipeline
 
 logger = get_logger(__name__)
 
@@ -54,7 +54,7 @@ class BotScheduler:
         logger.info("scheduled_run_starting")
         
         try:
-            stats = await run_bot()
+            stats = await run_v3_pipeline()
             logger.info(
                 "scheduled_run_completed",
                 status=stats.get("status"),

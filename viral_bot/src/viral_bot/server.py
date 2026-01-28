@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from .config import get_settings
 from .logging_conf import get_logger, setup_logging
 from .db import get_database, Output
-from .main import run_bot
+from .main import run_v3_pipeline
 from .scheduler import BotScheduler
 
 logger = get_logger(__name__)
@@ -224,7 +224,7 @@ async def trigger_run(background_tasks: BackgroundTasks):
     
     async def run_in_background():
         try:
-            stats = await run_bot()
+            stats = await run_v3_pipeline()
             logger.info("manual_run_completed", stats=stats)
         except Exception as e:
             logger.error("manual_run_failed", error=str(e))
