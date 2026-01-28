@@ -5,16 +5,22 @@ A production-ready bot that automatically generates viral health post ideas for 
 ## What It Does
 
 Twice daily, this bot:
-1. **Pulls fresh content** from curated health/longevity sources (PubMed, WHO, CDC, bioRxiv, BBC Health, etc.)
-2. **Filters and deduplicates** using URL matching and semantic similarity (embeddings)
-3. **Scores virality** using OpenAI with a custom rubric tailored to your pages
-4. **Generates 3-5 post ideas** including:
-   - Viral on-image headline
-   - Source links
-   - Category/archetype
-   - Image/visual suggestions
-5. **Exports to Google Sheets** (appends rows)
-6. **Maintains state** to avoid repeating topics
+1. **Pulls fresh content** from curated health/longevity sources (PubMed, WHO, CDC, bioRxiv, ScienceDaily, etc.)
+2. **Scores content against your winner corpus** using embeddings similarity
+3. **Matches viral primitives** (STUDY_SHOCK_COMPARISON, FOOD_SYMPTOM_BENEFIT, etc.)
+4. **Generates ALL CAPS slide copy** matching your top-performing style
+5. **Creates supporting captions** with source attribution
+6. **Exports to Google Sheets** with viral scores and primitives
+7. **Maintains state** to avoid repeating topics
+
+### V3 Viral Likeness Pipeline (NEW)
+
+The V3 pipeline introduces:
+- **Winner corpus scoring**: Computes embedding similarity to your top-performing headlines
+- **Viral primitives matching**: Deterministic pattern matching before LLM generation
+- **ALL CAPS slide copy**: Instagram-ready on-image text matching winner style
+- **Caption generation**: Supporting context with source attribution
+- **Weighted final scoring**: `0.45*viral_likeness + 0.35*primitive + 0.20*clarity`
 
 ---
 
@@ -144,6 +150,34 @@ Railway will auto-deploy when you push to your repository.
 
 ---
 
+## Winner Corpus Setup (V3 Pipeline)
+
+The V3 pipeline requires a Google Sheet containing your top-performing headlines.
+
+### 1. Create Winner Headlines Sheet
+1. Create a new Google Sheet (or use existing)
+2. In column A, add your top-performing headlines (one per row)
+3. The first row can be a header ("Headline") - it will be skipped
+4. Copy the Sheet ID from the URL
+
+### 2. Share with Service Account
+Share the winners sheet with your service account email (same as output sheet).
+
+### 3. Set Environment Variable
+```bash
+WINNERS_SHEET_ID=1ShjETp_vVEZWSdYrEwa3GFugwPEXPMHuRDXoyekO_RA
+```
+
+### 4. Local CSV Fallback (Dev)
+For local development, you can also provide a CSV file:
+```bash
+# Place file in project root
+AgingAI Output.csv
+```
+The CSV should have headlines in the first column.
+
+---
+
 ## Environment Variables Reference
 
 ```bash
@@ -166,6 +200,18 @@ MAX_OUTPUTS_PER_RUN=5           # Max post ideas per run
 MIN_VIRALITY_SCORE=40           # Minimum score to consider
 DEDUP_SIMILARITY_THRESHOLD=0.85 # Semantic similarity threshold
 
+# V3 Viral Likeness Settings
+WINNERS_SHEET_ID=1ShjETp...     # Sheet ID for winner headlines corpus
+WINNERS_RANGE=A:A               # Range to read winner headlines from
+WINNERS_REFRESH_HOURS=24        # Hours between winner corpus refreshes
+VIRAL_SIM_THRESHOLD=0.78        # Min cosine similarity to winners (0-1)
+VIRAL_SIM_WEIGHT=0.45           # Weight for viral likeness in final score
+PRIMITIVE_WEIGHT=0.35           # Weight for primitive score in final score
+LLM_QUALITY_WEIGHT=0.20         # Weight for LLM quality in final score
+PRIMITIVE_THRESHOLD=40          # Min primitive score (0-100) to pass
+BANNED_NEWSWORDS=objectives,stakeholders,framework,...
+ALLOW_TIER_C=true               # Allow Tier C (raw research) sources
+
 # Optional - Server
 PORT=8000                       # Health check server port
 ENABLE_HEALTH_SERVER=true       # Enable FastAPI server
@@ -183,8 +229,17 @@ LOG_LEVEL=INFO                  # DEBUG, INFO, WARNING, ERROR
 ## CLI Commands
 
 ```bash
-# Run the bot once (main workflow)
+# Run V3 pipeline (viral likeness scoring)
+python -m viral_bot run --v3
+
+# Run V3 pipeline in dry-run mode
+python -m viral_bot run --v3 --dry-run
+
+# Run V2 pipeline (legacy story compression)
 python -m viral_bot run
+
+# Debug a single URL through the pipeline
+python -m viral_bot debug-item URL --json-output
 
 # Backfill: fetch older content
 python -m viral_bot backfill --days 3
@@ -197,6 +252,12 @@ python -m viral_bot serve
 
 # Check database stats
 python -m viral_bot stats
+
+# Show current configuration
+python -m viral_bot config
+
+# List content sources with tiers
+python -m viral_bot sources
 ```
 
 ---
@@ -250,9 +311,26 @@ curl -X POST http://localhost:8000/feedback \
 
 ---
 
-## Archetypes
+## Viral Primitives (V3)
 
-The bot categorizes content into these archetypes:
+The V3 pipeline uses deterministic primitive matching before LLM generation:
+
+| Primitive | Description | Example |
+|-----------|-------------|---------|
+| `STUDY_SHOCK_COMPARISON` | Study + shocking number/comparison | "EQUIVALENT TO SMOKING 5 CIGARETTES A DAY" |
+| `SIMPLE_HACK_PAIN_RELIEF` | Small physical action → symptom relief | "ROLL A TENNIS BALL UNDER YOUR FOOT FOR 2 MINUTES" |
+| `FOOD_SYMPTOM_BENEFIT` | Specific food → health benefit | "EATING WALNUTS REDUCES INFLAMMATION BY 30%" |
+| `PARENT_CHILD_BIO` | Baby/parent + biological markers | "SKIN-TO-SKIN CONTACT REDUCES INFANT CORTISOL BY 42%" |
+| `AUTHORITY_CLASSIFICATION` | WHO/FDA/IARC classification | "NOW CLASSIFIED AS GROUP 1 CARCINOGEN BY THE WHO" |
+| `CULTURE_CONTROVERSY` | Health-relevant controversy | "NEW STUDY CHALLENGES DECADES OF NUTRITION ADVICE" |
+| `TIME_REVERSAL` | Age reversal, longevity | "COULD ADD 3.7 YEARS TO YOUR LIFE" |
+| `BODY_PART_SPECIFIC` | Specific body part + improvement | "YOUR BRAIN SHRINKS 0.5% PER YEAR AFTER 30" |
+
+---
+
+## Archetypes (V2/Legacy)
+
+The V2 pipeline categorizes content into these archetypes:
 
 | Archetype | Example |
 |-----------|---------|

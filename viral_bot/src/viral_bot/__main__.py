@@ -27,7 +27,7 @@ from rich.panel import Panel
 from .config import get_settings
 from .logging_conf import setup_logging, get_logger
 from .db import get_database
-from .main import run_bot, debug_single_url
+from .main import run_bot, debug_single_url, run_v3_pipeline
 from .server import run_server
 from .sheets import test_connection as test_sheets
 
@@ -47,60 +47,101 @@ def cli(debug: bool):
 @click.option("--freshness", "-f", type=int, help="Freshness window in hours")
 @click.option("--max-outputs", "-n", type=int, help="Maximum outputs to generate")
 @click.option("--dry-run", is_flag=True, help="Run without writing to Google Sheets")
-def run(freshness: int, max_outputs: int, dry_run: bool):
+@click.option("--v3", is_flag=True, help="Use V3 viral-likeness pipeline")
+def run(freshness: int, max_outputs: int, dry_run: bool, v3: bool):
     """
     Run the bot once (fetch, evaluate, generate, export).
 
-    Story Compression Pipeline:
-    1. Fetch from tiered sources (A/B/C credibility)
+    V3 Viral Likeness Pipeline (--v3):
+    1. Fetch from tiered sources
+    2. Hard reject (deterministic)
+    3. Primitives matching
+    4. Narrative spine extraction
+    5. ALL CAPS slide copy generation
+    6. Caption generation
+    7. Viral likeness scoring
+    8. Final weighted selection
+    9. Export to Sheets
+
+    V2 Story Compression Pipeline (default):
+    1. Fetch from tiered sources
     2. Pre-AI generic filter
-    3. Narrative spine extraction (AI Stage #1)
-    4. Quality gate (clarity score, emotional hook)
-    5. Story compression (AI Stage #2)
+    3. Narrative spine extraction
+    4. Quality gate
+    5. Story compression
     6. Headline quality gate
     7. Novelty + Diversity enforcement
     8. Export to Sheets
 
     Examples:
-      python -m viral_bot run
-      python -m viral_bot run --dry-run
+      python -m viral_bot run --v3
+      python -m viral_bot run --v3 --dry-run
       python -m viral_bot run -f 24 -n 3
     """
-    if dry_run:
-        console.print(Panel("[bold yellow]Starting Viral Bot Run (DRY RUN)[/bold yellow]\nStory Compression Pipeline v2"))
-    else:
-        console.print(Panel("[bold green]Starting Viral Bot Run[/bold green]\nStory Compression Pipeline v2"))
+    pipeline = "V3 Viral Likeness" if v3 else "V2 Story Compression"
+    mode = "DRY RUN" if dry_run else "PRODUCTION"
+
+    console.print(Panel(
+        f"[bold green]Starting Viral Bot Run ({mode})[/bold green]\n{pipeline} Pipeline"
+    ))
 
     try:
-        stats = asyncio.run(run_bot(
-            freshness_hours=freshness,
-            max_outputs=max_outputs,
-            dry_run=dry_run,
-        ))
+        if v3:
+            stats = asyncio.run(run_v3_pipeline(
+                freshness_hours=freshness,
+                max_outputs=max_outputs,
+                dry_run=dry_run,
+            ))
 
-        # Display results
-        table = Table(title="Run Results - Story Compression Pipeline")
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green")
+            # V3 metrics
+            table = Table(title="Run Results - V3 Viral Likeness Pipeline")
+            table.add_column("Metric", style="cyan")
+            table.add_column("Value", style="green")
 
-        # Show key metrics for new pipeline
-        metrics = [
-            ("run_id", stats.get("run_id", "")),
-            ("items_fetched", stats.get("items_fetched", 0)),
-            ("items_with_content", stats.get("items_with_content", 0)),
-            ("items_after_pre_filter", stats.get("items_after_pre_filter", 0)),
-            ("items_after_dedup", stats.get("items_after_dedup", 0)),
-            ("items_with_narrative", stats.get("items_with_narrative", 0)),
-            ("items_after_narrative_gate", stats.get("items_after_narrative_gate", 0)),
-            ("items_with_headline", stats.get("items_with_headline", 0)),
-            ("items_after_headline_gate", stats.get("items_after_headline_gate", 0)),
-            ("items_after_novelty", stats.get("items_after_novelty", 0)),
-            ("items_after_diversity", stats.get("items_after_diversity", 0)),
-            ("items_exported", stats.get("items_exported", 0)),
-        ]
+            v3_metrics = [
+                ("run_id", stats.get("run_id", "")),
+                ("items_fetched", stats.get("items_fetched", 0)),
+                ("items_with_content", stats.get("items_with_content", 0)),
+                ("items_after_hard_rejects", stats.get("items_after_hard_rejects", 0)),
+                ("items_after_primitives", stats.get("items_after_primitives", 0)),
+                ("items_with_spine", stats.get("items_with_spine", 0)),
+                ("items_with_slide", stats.get("items_with_slide", 0)),
+                ("items_after_viral_scoring", stats.get("items_after_viral_scoring", 0)),
+                ("items_exported", stats.get("items_exported", 0)),
+            ]
 
-        for key, value in metrics:
-            table.add_row(key, str(value))
+            for key, value in v3_metrics:
+                table.add_row(key, str(value))
+
+        else:
+            stats = asyncio.run(run_bot(
+                freshness_hours=freshness,
+                max_outputs=max_outputs,
+                dry_run=dry_run,
+            ))
+
+            # V2 metrics
+            table = Table(title="Run Results - V2 Story Compression Pipeline")
+            table.add_column("Metric", style="cyan")
+            table.add_column("Value", style="green")
+
+            v2_metrics = [
+                ("run_id", stats.get("run_id", "")),
+                ("items_fetched", stats.get("items_fetched", 0)),
+                ("items_with_content", stats.get("items_with_content", 0)),
+                ("items_after_pre_filter", stats.get("items_after_pre_filter", 0)),
+                ("items_after_dedup", stats.get("items_after_dedup", 0)),
+                ("items_with_narrative", stats.get("items_with_narrative", 0)),
+                ("items_after_narrative_gate", stats.get("items_after_narrative_gate", 0)),
+                ("items_with_headline", stats.get("items_with_headline", 0)),
+                ("items_after_headline_gate", stats.get("items_after_headline_gate", 0)),
+                ("items_after_novelty", stats.get("items_after_novelty", 0)),
+                ("items_after_diversity", stats.get("items_after_diversity", 0)),
+                ("items_exported", stats.get("items_exported", 0)),
+            ]
+
+            for key, value in v2_metrics:
+                table.add_row(key, str(value))
 
         console.print(table)
 
@@ -390,12 +431,23 @@ def config():
     """Show current configuration (excluding secrets)."""
     settings = get_settings()
 
-    console.print(Panel("[bold blue]Current Configuration - Story Compression Pipeline[/bold blue]"))
+    console.print(Panel("[bold blue]Current Configuration - Viral Health Bot[/bold blue]"))
 
     # Bot settings
     console.print("\n[cyan]Bot Settings:[/cyan]")
     console.print(f"  freshness_hours:     {settings.freshness_hours}")
     console.print(f"  max_outputs_per_run: {settings.max_outputs_per_run}")
+
+    # V3 Viral Likeness Settings
+    console.print("\n[cyan]V3 Viral Likeness Settings:[/cyan]")
+    console.print(f"  winners_sheet_id:      {settings.winners_sheet_id[:20]}...")
+    console.print(f"  winners_refresh_hours: {settings.winners_refresh_hours}")
+    console.print(f"  viral_sim_threshold:   {settings.viral_sim_threshold}")
+    console.print(f"  viral_sim_weight:      {settings.viral_sim_weight}")
+    console.print(f"  primitive_threshold:   {settings.primitive_threshold}")
+    console.print(f"  primitive_weight:      {settings.primitive_weight}")
+    console.print(f"  llm_quality_weight:    {settings.llm_quality_weight}")
+    console.print(f"  allow_tier_c:          {settings.allow_tier_c}")
 
     # Anti-generic settings
     console.print("\n[cyan]Anti-Generic Settings:[/cyan]")
@@ -403,6 +455,7 @@ def config():
     console.print(f"  min_body_chars_news:   {settings.min_body_chars_news}")
     console.print(f"  min_differentiators:   {settings.min_differentiators}")
     console.print(f"  enable_pre_ai_filter:  {settings.enable_pre_ai_filter}")
+    console.print(f"  banned_newswords:      {settings.banned_newswords[:50]}...")
 
     # Story compression settings
     console.print("\n[cyan]Story Compression Settings:[/cyan]")

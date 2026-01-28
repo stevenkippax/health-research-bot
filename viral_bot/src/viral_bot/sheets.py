@@ -29,7 +29,49 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Column headers for the output sheet (V2 - Story Compression)
+# Column headers for the output sheet (V3 - Viral Likeness Pipeline)
+SHEET_HEADERS_V3 = [
+    # Core columns
+    "run_timestamp_utc",
+    "source_name",
+    "source_url",
+    "published_at",
+    "credibility_tier",
+    "content_type",
+
+    # Slide output (main content)
+    "image_headline",            # ALL CAPS Instagram slide text
+    "caption",                   # Supporting caption with source
+
+    # Viral scoring
+    "primitive",                 # Viral primitive type
+    "viral_likeness_score",      # 0-100 similarity to winners
+    "primitive_score",           # 0-100 primitive match strength
+    "final_score",               # Weighted combination
+
+    # Narrative elements
+    "hook",
+    "action",
+    "outcome",
+    "numbers",                   # Comma-separated
+    "time_window",
+    "who_it_applies_to",
+
+    # Quality metrics
+    "standalone_clarity",        # 0-10 score
+    "tone",                      # shock/awe/concern/warmth/humor
+    "emotional_hook",
+    "support_level",
+
+    # Status and feedback
+    "status",
+    "feedback_likes",
+    "feedback_shares",
+    "feedback_saves",
+    "feedback_notes",
+]
+
+# Column headers for the output sheet (V2 - Story Compression) - Legacy
 SHEET_HEADERS_V2 = [
     # Core columns
     "run_timestamp_utc",
@@ -196,6 +238,151 @@ class SheetsExporter:
                     logger.info("headers_updated", new_columns=len(headers) - len(first_row))
         except Exception:
             worksheet.append_row(headers)
+
+    def format_row_v3(
+        self,
+        run_id: str,
+        item: "NormalizedItem",
+        spine: "NarrativeSpine",
+        image_headline: str,
+        caption: str,
+        viral_likeness_score: int,
+        primitive_score: int,
+        final_score: float,
+    ) -> list:
+        """
+        Format a row for the V3 viral-likeness format.
+
+        Args:
+            run_id: Run identifier
+            item: NormalizedItem
+            spine: NarrativeSpine from extraction
+            image_headline: Generated slide copy
+            caption: Generated caption
+            viral_likeness_score: Similarity to winners (0-100)
+            primitive_score: Primitive match strength (0-100)
+            final_score: Weighted final score
+
+        Returns:
+            List of cell values matching SHEET_HEADERS_V3
+        """
+        return [
+            # Core columns
+            datetime.now(timezone.utc).isoformat(),       # run_timestamp_utc
+            item.source_name,                              # source_name
+            item.url,                                      # source_url
+            item.published_at.isoformat() if item.published_at else "",  # published_at
+            item.credibility_tier.value,                   # credibility_tier
+            item.content_type.value,                       # content_type
+
+            # Slide output
+            image_headline,                                # image_headline
+            caption,                                       # caption
+
+            # Viral scoring
+            spine.primitive,                               # primitive
+            viral_likeness_score,                          # viral_likeness_score
+            primitive_score,                               # primitive_score
+            round(final_score, 2),                         # final_score
+
+            # Narrative elements
+            spine.hook,                                    # hook
+            spine.action or "",                            # action
+            spine.outcome or "",                           # outcome
+            ", ".join(spine.numbers),                      # numbers
+            spine.time_window or "",                       # time_window
+            spine.who_it_applies_to or "",                 # who_it_applies_to
+
+            # Quality metrics
+            spine.standalone_clarity,                      # standalone_clarity
+            spine.tone,                                    # tone
+            spine.emotional_hook,                          # emotional_hook
+            spine.support_level,                           # support_level
+
+            # Status and feedback
+            "NEW",                                         # status
+            "",                                            # feedback_likes
+            "",                                            # feedback_shares
+            "",                                            # feedback_saves
+            "",                                            # feedback_notes
+        ]
+
+    def export_outputs_v3(
+        self,
+        run_id: str,
+        outputs: list[dict],  # List of output dictionaries with all required fields
+    ) -> int:
+        """
+        Export viral-likeness outputs to Google Sheets (V3 format).
+
+        Args:
+            run_id: Run identifier
+            outputs: List of dicts with keys: item, spine, image_headline, caption,
+                     viral_likeness_score, primitive_score, final_score
+
+        Returns:
+            Number of rows exported
+        """
+        logger.info("exporting_to_sheets_v3", count=len(outputs))
+
+        rows = []
+        for output in outputs:
+            row = self.format_row_v3(
+                run_id=run_id,
+                item=output["item"],
+                spine=output["spine"],
+                image_headline=output["image_headline"],
+                caption=output["caption"],
+                viral_likeness_score=output["viral_likeness_score"],
+                primitive_score=output["primitive_score"],
+                final_score=output["final_score"],
+            )
+            rows.append(row)
+
+        return self.append_rows_v3(rows)
+
+    def append_rows_v3(self, rows: list[list]) -> int:
+        """Append rows using V3 headers."""
+        if not rows:
+            return 0
+
+        worksheet = self._get_or_create_sheet_v3()
+        self._ensure_headers_v3(worksheet)
+
+        worksheet.append_rows(rows)
+        logger.info("rows_appended_v3", count=len(rows))
+        return len(rows)
+
+    def _get_or_create_sheet_v3(self) -> gspread.Worksheet:
+        """Get or create worksheet with V3 headers."""
+        spreadsheet = self.client.open_by_key(self.sheet_id)
+
+        try:
+            worksheet = spreadsheet.worksheet(self.tab_name)
+        except gspread.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(
+                title=self.tab_name,
+                rows=1000,
+                cols=len(SHEET_HEADERS_V3),
+            )
+            worksheet.append_row(SHEET_HEADERS_V3)
+            logger.info("worksheet_created_v3", tab=self.tab_name)
+
+        return worksheet
+
+    def _ensure_headers_v3(self, worksheet: gspread.Worksheet) -> None:
+        """Ensure V3 headers are present."""
+        try:
+            first_row = worksheet.row_values(1)
+            if not first_row:
+                worksheet.insert_row(SHEET_HEADERS_V3, 1)
+            elif first_row != SHEET_HEADERS_V3:
+                if len(first_row) < len(SHEET_HEADERS_V3):
+                    for i, header in enumerate(SHEET_HEADERS_V3):
+                        if i >= len(first_row):
+                            worksheet.update_cell(1, i + 1, header)
+        except Exception:
+            worksheet.append_row(SHEET_HEADERS_V3)
 
     def format_row_v2(
         self,

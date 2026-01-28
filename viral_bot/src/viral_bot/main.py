@@ -48,6 +48,13 @@ from .story_generator import (
 )
 from .sheets import SheetsExporter
 
+# V3 Pipeline imports
+from .winners import get_winner_corpus, WinnerCorpus
+from .viral_scorer import get_viral_scorer, ViralScore
+from .primitives import match_primitive, check_hard_rejects, PrimitiveMatch
+from .slide_writer import get_slide_writer, SlideCopyResult
+from .caption_writer import get_caption_writer, CaptionResult
+
 logger = get_logger(__name__)
 
 
@@ -157,6 +164,11 @@ class BotRunner:
         self.narrative_extractor = NarrativeExtractor()
         self.story_compressor = StoryCompressor()
         self.exporter = SheetsExporter()
+
+        # V3 Components
+        self.viral_scorer = get_viral_scorer()
+        self.slide_writer = get_slide_writer()
+        self.caption_writer = get_caption_writer()
 
         logger.info("bot_runner_initialized")
 
@@ -647,6 +659,302 @@ def run_bot_sync(
 ) -> dict:
     """Synchronous wrapper for run_bot."""
     return asyncio.run(run_bot(freshness_hours, max_outputs, dry_run))
+
+
+async def run_v3_pipeline(
+    freshness_hours: Optional[int] = None,
+    max_outputs: Optional[int] = None,
+    dry_run: bool = False,
+) -> dict:
+    """
+    Run the V3 viral-likeness pipeline.
+
+    This pipeline adds:
+    - Winner corpus similarity scoring
+    - Viral primitives matching
+    - ALL CAPS slide copy generation
+    - Caption generation
+    - Weighted final scoring
+
+    Args:
+        freshness_hours: Override default freshness window
+        max_outputs: Override default max outputs
+        dry_run: If True, don't write to Sheets
+
+    Returns:
+        Run statistics dictionary
+    """
+    settings = get_settings()
+    runner = BotRunner()
+
+    run_id = runner.generate_run_id()
+    bind_context(run_id=run_id)
+
+    freshness_hours = freshness_hours or settings.freshness_hours
+    max_outputs = max_outputs or settings.max_outputs_per_run
+
+    logger.info(
+        "v3_run_started",
+        freshness_hours=freshness_hours,
+        max_outputs=max_outputs,
+        dry_run=dry_run,
+    )
+
+    # Initialize viral scorer with winner corpus
+    logger.info("initializing_viral_scorer")
+    runner.viral_scorer.initialize()
+
+    stats = {
+        "run_id": run_id,
+        "pipeline_version": "v3",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "items_fetched": 0,
+        "items_with_content": 0,
+        "items_after_hard_rejects": 0,
+        "items_after_primitives": 0,
+        "items_with_spine": 0,
+        "items_with_slide": 0,
+        "items_after_viral_scoring": 0,
+        "items_exported": 0,
+        "errors": [],
+        "dry_run": dry_run,
+    }
+
+    session = runner.db.get_session()
+
+    try:
+        runner.db.start_run(session, run_id)
+
+        # === STEP 1: Fetch content from tiered sources ===
+        logger.info("v3_step_1_fetching_content")
+        fetched_items = await runner.registry.fetch_all(
+            freshness_hours=freshness_hours,
+            max_concurrent=settings.max_concurrent_fetches,
+        )
+        stats["items_fetched"] = len(fetched_items)
+
+        if not fetched_items:
+            logger.warning("no_items_fetched")
+            return stats
+
+        # === STEP 2: Fetch full content ===
+        logger.info("v3_step_2_fetching_full_content")
+        normalized_items = await runner.content_fetcher.fetch_batch(
+            fetched_items,
+            min_body_chars_paper=settings.min_body_chars_paper,
+            min_body_chars_news=settings.min_body_chars_news,
+        )
+        stats["items_with_content"] = len(normalized_items)
+
+        if not normalized_items:
+            logger.warning("no_items_with_sufficient_content")
+            return stats
+
+        # === STEP 3: Hard rejects (deterministic) ===
+        logger.info("v3_step_3_hard_rejects")
+        passed_hard_rejects = []
+        for item in normalized_items:
+            full_text = f"{item.title} {item.body_text}"
+            should_reject, reject_reason = check_hard_rejects(full_text)
+            if not should_reject:
+                passed_hard_rejects.append(item)
+            else:
+                logger.debug("v3_hard_reject", url=item.url, reason=reject_reason)
+
+        stats["items_after_hard_rejects"] = len(passed_hard_rejects)
+
+        if not passed_hard_rejects:
+            logger.warning("all_items_hard_rejected")
+            return stats
+
+        # === STEP 4: Primitives matching ===
+        logger.info("v3_step_4_primitives_matching")
+        items_with_primitives = []
+        for item in passed_hard_rejects:
+            full_text = f"{item.title} {item.body_text}"
+            primitive_match = match_primitive(full_text)
+
+            # Require decent primitive score or will rely on viral similarity
+            if primitive_match.score >= settings.primitive_threshold or primitive_match.primitive != "NONE":
+                items_with_primitives.append((item, primitive_match))
+            else:
+                logger.debug("v3_weak_primitive", url=item.url, score=primitive_match.score)
+
+        stats["items_after_primitives"] = len(items_with_primitives)
+
+        if not items_with_primitives:
+            logger.warning("no_items_with_strong_primitives")
+            return stats
+
+        # === STEP 5: Narrative spine extraction ===
+        logger.info("v3_step_5_narrative_extraction")
+        items_with_spines = []
+        for item, primitive_match in items_with_primitives:
+            spine = runner.narrative_extractor.extract(item)
+            if spine and spine.relevant:
+                items_with_spines.append((item, primitive_match, spine))
+            else:
+                reason = spine.rejection_reason if spine else "extraction_failed"
+                logger.debug("v3_spine_rejected", url=item.url, reason=reason)
+
+        stats["items_with_spine"] = len(items_with_spines)
+
+        if not items_with_spines:
+            logger.warning("no_items_with_valid_spine")
+            return stats
+
+        # === STEP 6: Slide copy generation ===
+        logger.info("v3_step_6_slide_generation")
+        items_with_slides = []
+        for item, primitive_match, spine in items_with_spines:
+            slide_result = runner.slide_writer.write(item, spine)
+            if slide_result.success:
+                items_with_slides.append((item, primitive_match, spine, slide_result))
+            else:
+                logger.debug("v3_slide_rejected", url=item.url, reason=slide_result.reason)
+
+        stats["items_with_slide"] = len(items_with_slides)
+
+        if not items_with_slides:
+            logger.warning("no_items_with_valid_slide")
+            return stats
+
+        # === STEP 7: Caption generation & viral scoring ===
+        logger.info("v3_step_7_scoring_and_captions")
+        scored_items = []
+        for item, primitive_match, spine, slide_result in items_with_slides:
+            # Generate caption
+            caption_result = runner.caption_writer.write(
+                item, spine, slide_result.image_headline
+            )
+
+            # Score viral likeness
+            viral_score = runner.viral_scorer.score(slide_result.image_headline)
+
+            # Calculate final weighted score
+            final_score = (
+                settings.viral_sim_weight * viral_score.score +
+                settings.primitive_weight * primitive_match.score +
+                settings.llm_quality_weight * spine.standalone_clarity * 10
+            )
+
+            # Apply threshold check
+            if viral_score.max_similarity >= settings.viral_sim_threshold or final_score >= 50:
+                scored_items.append({
+                    "item": item,
+                    "primitive_match": primitive_match,
+                    "spine": spine,
+                    "slide_result": slide_result,
+                    "caption_result": caption_result,
+                    "viral_score": viral_score,
+                    "final_score": final_score,
+                })
+            else:
+                logger.debug(
+                    "v3_viral_score_too_low",
+                    url=item.url,
+                    viral_sim=viral_score.max_similarity,
+                    final_score=final_score,
+                )
+
+        stats["items_after_viral_scoring"] = len(scored_items)
+
+        if not scored_items:
+            logger.warning("no_items_passed_viral_scoring")
+            return stats
+
+        # === STEP 8: Sort by final score and select top items ===
+        logger.info("v3_step_8_selection")
+        scored_items.sort(key=lambda x: -x["final_score"])
+
+        # Apply diversity constraints
+        selected = []
+        study_count = 0
+        max_study = 2
+
+        for item_data in scored_items:
+            if len(selected) >= max_outputs:
+                break
+
+            primitive = item_data["primitive_match"].primitive
+            is_study_type = primitive in ("STUDY_SHOCK_COMPARISON", "PARENT_CHILD_BIO")
+
+            if is_study_type and study_count >= max_study:
+                continue
+
+            selected.append(item_data)
+            if is_study_type:
+                study_count += 1
+
+        # === STEP 9: Export to Google Sheets ===
+        if not dry_run and selected:
+            logger.info("v3_step_9_exporting")
+            try:
+                export_data = []
+                for item_data in selected:
+                    export_data.append({
+                        "item": item_data["item"],
+                        "spine": item_data["spine"],
+                        "image_headline": item_data["slide_result"].image_headline,
+                        "caption": item_data["caption_result"].caption or "",
+                        "viral_likeness_score": item_data["viral_score"].score,
+                        "primitive_score": item_data["primitive_match"].score,
+                        "final_score": item_data["final_score"],
+                    })
+
+                exported = runner.exporter.export_outputs_v3(run_id, export_data)
+                stats["items_exported"] = exported
+            except Exception as e:
+                logger.error("v3_sheets_export_failed", error=str(e))
+                stats["errors"].append(f"Sheets export failed: {str(e)}")
+        else:
+            logger.info("v3_dry_run_skipping_export")
+
+        # Log results
+        stats["completed_at"] = datetime.now(timezone.utc).isoformat()
+        stats["status"] = "SUCCESS"
+
+        # Print summary
+        print("\n" + "=" * 60)
+        print("V3 PIPELINE RUN COMPLETE")
+        print("=" * 60)
+        print(f"Items fetched: {stats['items_fetched']}")
+        print(f"Items after hard rejects: {stats['items_after_hard_rejects']}")
+        print(f"Items with primitives: {stats['items_after_primitives']}")
+        print(f"Items with spine: {stats['items_with_spine']}")
+        print(f"Items with slide: {stats['items_with_slide']}")
+        print(f"Items after viral scoring: {stats['items_after_viral_scoring']}")
+        print(f"Items exported: {stats['items_exported']}")
+        print()
+
+        if selected:
+            print("SELECTED OUTPUTS:")
+            for i, item_data in enumerate(selected, 1):
+                print(f"\n{i}. [{item_data['primitive_match'].primitive}]")
+                print(f"   Headline: {item_data['slide_result'].image_headline[:80]}...")
+                print(f"   Viral Score: {item_data['viral_score'].score}")
+                print(f"   Primitive Score: {item_data['primitive_match'].score}")
+                print(f"   Final Score: {item_data['final_score']:.1f}")
+
+        print("=" * 60)
+
+        runner.db.complete_run(
+            session, run_id, "SUCCESS",
+            items_fetched=stats["items_fetched"],
+            items_evaluated=stats["items_with_spine"],
+            items_output=stats.get("items_exported", 0),
+        )
+
+        return stats
+
+    except Exception as e:
+        logger.error("v3_run_failed", error=str(e))
+        stats["errors"].append(str(e))
+        stats["status"] = "FAILED"
+        raise
+
+    finally:
+        session.close()
 
 
 async def debug_single_url(url: str) -> dict:

@@ -563,9 +563,34 @@ def is_wishy_washy(text: str) -> tuple[bool, Optional[str]]:
     return False, None
 
 
+def contains_banned_newswords(text: str) -> tuple[bool, list[str]]:
+    """
+    Check if text contains banned newswords from config.
+
+    Args:
+        text: Text to check
+
+    Returns:
+        Tuple of (has_banned, list of matched words)
+    """
+    from .config import get_settings
+    settings = get_settings()
+
+    text_lower = text.lower()
+    matched = []
+
+    for word in settings.banned_newswords_list:
+        if word in text_lower:
+            matched.append(word)
+
+    return len(matched) >= 2, matched  # Require 2+ matches to reject
+
+
 def is_admin_sludge(text: str) -> tuple[bool, Optional[str]]:
     """
     Check if text contains administrative sludge (not health impact content).
+
+    Also checks against banned newswords from config.
 
     Args:
         text: Title or body text to check

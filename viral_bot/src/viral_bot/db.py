@@ -4,8 +4,9 @@ Database models and operations using SQLAlchemy.
 Supports both SQLite and PostgreSQL backends.
 """
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Generator
 import hashlib
 import json
 
@@ -155,19 +156,46 @@ class RunLog(Base):
     Log of bot runs for monitoring.
     """
     __tablename__ = "run_logs"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String(50), nullable=False, unique=True, index=True)
-    
+
     started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(20), default="RUNNING")  # RUNNING, SUCCESS, FAILED
-    
+
     items_fetched = Column(Integer, default=0)
     items_evaluated = Column(Integer, default=0)
     items_output = Column(Integer, default=0)
-    
+
     error_message = Column(Text, nullable=True)
+
+
+class WinnerHeadline(Base):
+    """
+    Cached winner headlines for viral likeness scoring.
+    """
+    __tablename__ = "winner_headlines"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    headline = Column(Text, nullable=False)
+    headline_hash = Column(String(64), nullable=False, unique=True, index=True)
+    embedding = Column(JSON, nullable=True)  # Cached embedding vector
+    cluster_id = Column(Integer, nullable=True)  # Cluster assignment
+    cached_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class WinnerCluster(Base):
+    """
+    Cluster centroids for winner headlines.
+    """
+    __tablename__ = "winner_clusters"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cluster_id = Column(Integer, nullable=False, unique=True, index=True)
+    centroid = Column(JSON, nullable=False)  # Centroid embedding vector
+    headline_count = Column(Integer, default=0)
+    computed_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     
 
 # Database manager
@@ -517,3 +545,18 @@ def get_database() -> Database:
         _db_instance = Database()
         _db_instance.create_tables()
     return _db_instance
+
+
+@contextmanager
+def get_session() -> Generator[Session, None, None]:
+    """Context manager for database sessions."""
+    db = get_database()
+    session = db.get_session()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
