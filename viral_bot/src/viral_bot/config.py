@@ -75,6 +75,33 @@ class Settings(BaseSettings):
     tier_b_target_ratio: float = Field(0.25, description="Target ratio of Tier B sources (0-1)")
     tier_c_target_ratio: float = Field(0.10, description="Target ratio of Tier C sources (0-1)")
 
+    # Winner corpus settings (V3 - viral likeness scoring)
+    winners_sheet_id: str = Field(
+        "1ShjETp_vVEZWSdYrEwa3GFugwPEXPMHuRDXoyekO_RA",
+        description="Google Sheet ID for winner headlines corpus"
+    )
+    winners_range: str = Field("A:A", description="Range to read winner headlines from")
+    winners_refresh_hours: int = Field(24, description="Hours between winner corpus refreshes")
+    winners_csv_path: str = Field("AgingAI Output.csv", description="Local CSV fallback for winners")
+
+    # Viral similarity scoring
+    viral_sim_threshold: float = Field(0.78, description="Min cosine similarity to winners (0-1)")
+    viral_sim_weight: float = Field(0.45, description="Weight for viral likeness in final score")
+    primitive_weight: float = Field(0.35, description="Weight for primitive score in final score")
+    llm_quality_weight: float = Field(0.20, description="Weight for LLM quality in final score")
+
+    # Viral primitives
+    primitive_threshold: int = Field(40, description="Min primitive score (0-100) to pass")
+
+    # Banned newswords (admin/policy sludge detection)
+    banned_newswords: str = Field(
+        "objectives,stakeholders,local authorities,consultation,strategy,framework,initiative,programme,must meet,compliance,procurement,governance,commissioning",
+        description="Comma-separated banned words indicating admin sludge"
+    )
+
+    # Source tier control
+    allow_tier_c: bool = Field(True, description="Allow Tier C (raw research) sources")
+
     # Server
     enable_health_server: bool = Field(True, description="Enable FastAPI health server")
     port: int = Field(8000, description="Health server port")
@@ -107,6 +134,11 @@ class Settings(BaseSettings):
     def schedule_hours_list(self) -> list[int]:
         """Get schedule hours as a list of integers."""
         return [int(h.strip()) for h in self.schedule_hours.split(",")]
+
+    @property
+    def banned_newswords_list(self) -> list[str]:
+        """Get banned newswords as a list."""
+        return [w.strip().lower() for w in self.banned_newswords.split(",") if w.strip()]
 
     @property
     def google_credentials_dict(self) -> dict:

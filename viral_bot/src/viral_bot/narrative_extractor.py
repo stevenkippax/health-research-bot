@@ -2,20 +2,22 @@
 Narrative Spine Extraction - AI Stage #1
 
 Extracts the story structure from articles before headline generation.
-This produces structured narrative elements that feed into story compression.
+This produces structured narrative elements that feed into slide copy generation.
 
-Output schema:
-- hook: The surprising/attention-grabbing element
-- key_numbers: Specific numbers that make the story concrete
-- who_it_applies_to: The population this affects
-- time_window: Duration/time frame of the effect
-- mechanism_or_why: Brief explanation of causation
-- real_world_consequence: What this means for people's lives
-- standalone_clarity_score: 1-10, how clear is this without context?
-- emotional_hook: fear/hope/surprise/validation/curiosity/outrage/none
-- lay_audience_relevance: 1-10, is this useful for regular people (not medical pros)?
-- actionable_lesson: For human interest stories, what can people learn/do?
-- controversy_potential: For news/policy, is this controversial/viral?
+V3 Output Schema (Viral Likeness Pipeline):
+- relevant: Whether this content is suitable for Instagram health audience
+- rejection_reason: Why content was rejected (null if relevant)
+- primitive: Viral primitive type (STUDY_SHOCK_COMPARISON, SIMPLE_HACK_PAIN_RELIEF, etc.)
+- hook: Plain English hook
+- action: What to do (null if not actionable)
+- outcome: Expected result
+- numbers: Specific numbers from text
+- time_window: Duration/timeframe
+- who_it_applies_to: Target population
+- mechanism_clause: Brief causation (<=12 words)
+- why_it_matters: One sentence impact
+- standalone_clarity: 0-10 score
+- tone: shock/awe/concern/warmth/humor
 """
 
 import json
@@ -35,163 +37,213 @@ logger = get_logger(__name__)
 
 class EmotionalHook(str, Enum):
     """Types of emotional hooks that drive engagement."""
-    FEAR = "fear"                    # Danger, risk, warning
-    HOPE = "hope"                    # Promise, possibility, cure
-    SURPRISE = "surprise"            # Counterintuitive, unexpected
-    VALIDATION = "validation"        # Confirms existing beliefs
-    CURIOSITY = "curiosity"          # Mystery, "how" questions
-    OUTRAGE = "outrage"              # Injustice, scandal
-    NONE = "none"                    # No strong emotional hook
+    FEAR = "fear"
+    HOPE = "hope"
+    SURPRISE = "surprise"
+    VALIDATION = "validation"
+    CURIOSITY = "curiosity"
+    OUTRAGE = "outrage"
+    NONE = "none"
 
 
-# Pydantic model for structured output
+class Tone(str, Enum):
+    """Tone categories for slide copy."""
+    SHOCK = "shock"
+    AWE = "awe"
+    CONCERN = "concern"
+    WARMTH = "warmth"
+    HUMOR = "humor"
+
+
+# Pydantic model for structured output (V3)
 class NarrativeSpineResponse(BaseModel):
-    """Structured response from narrative extraction."""
+    """Structured response from narrative extraction - V3 with viral primitives."""
+
+    relevant: bool = Field(
+        description="Is this content suitable for Instagram health audience? False for admin sludge, null results, generic truisms, promo content."
+    )
+
+    rejection_reason: Optional[str] = Field(
+        default=None,
+        description="If not relevant, why? (admin_sludge, null_result, generic_truism, promo_content, too_technical, local_program)"
+    )
+
+    primitive: Literal[
+        "STUDY_SHOCK_COMPARISON",
+        "SIMPLE_HACK_PAIN_RELIEF",
+        "FOOD_SYMPTOM_BENEFIT",
+        "PARENT_CHILD_BIO",
+        "AUTHORITY_CLASSIFICATION",
+        "CULTURE_CONTROVERSY",
+        "TIME_REVERSAL",
+        "BODY_PART_SPECIFIC",
+        "NONE"
+    ] = Field(
+        description="Best viral primitive for this content"
+    )
 
     hook: str = Field(
-        description="The surprising or attention-grabbing core element (1-2 sentences)"
+        description="The surprising or attention-grabbing core element in plain English (1-2 sentences)"
     )
 
-    key_numbers: list[str] = Field(
+    action: Optional[str] = Field(
+        default=None,
+        description="What specific action can people take? (eat X, avoid Y, do Z) - null if not actionable"
+    )
+
+    outcome: Optional[str] = Field(
+        default=None,
+        description="Expected result of the action or finding (reduce pain, lower risk, improve sleep)"
+    )
+
+    numbers: list[str] = Field(
         default_factory=list,
-        description="Specific numbers that make the story concrete (e.g., '27% reduction', '3.7 years longer', '12,000 participants')"
+        description="Specific numbers from the text (e.g., '27%', '3.7 years', '12,000 participants')"
     )
 
-    who_it_applies_to: str = Field(
-        description="The specific population this affects (e.g., 'adults over 50', 'pregnant women', 'people with diabetes')"
+    time_window: Optional[str] = Field(
+        default=None,
+        description="Duration or time frame (e.g., '10-year follow-up', 'within 6 weeks', 'daily for 3 months')"
     )
 
-    time_window: str = Field(
-        description="Duration or time frame of the effect (e.g., '10-year follow-up', 'within 6 weeks', 'daily for 3 months')"
+    who_it_applies_to: Optional[str] = Field(
+        default=None,
+        description="Specific population (e.g., 'adults over 50', 'pregnant women') - null if general"
     )
 
-    mechanism_or_why: str = Field(
-        description="Brief explanation of causation or mechanism (1 sentence)"
+    mechanism_clause: str = Field(
+        description="Brief causation explanation - MUST BE 12 WORDS OR FEWER"
     )
 
-    real_world_consequence: str = Field(
-        description="What this means for people's lives in plain language"
+    why_it_matters: str = Field(
+        description="One sentence explaining real-world impact in plain language"
     )
 
-    standalone_clarity_score: int = Field(
-        ge=1, le=10,
-        description="1-10: How clear is this story without any additional context? 10 = crystal clear to anyone"
+    standalone_clarity: int = Field(
+        ge=0, le=10,
+        description="0-10: How clear is this without context? 10 = crystal clear, 0 = incomprehensible"
+    )
+
+    tone: Literal["shock", "awe", "concern", "warmth", "humor"] = Field(
+        description="Primary tone for the content"
     )
 
     emotional_hook: Literal["fear", "hope", "surprise", "validation", "curiosity", "outrage", "none"] = Field(
         description="Primary emotional driver"
     )
 
-    content_archetype: Literal[
-        "STUDY_STAT",           # Research finding with numbers
-        "WARNING_RISK",         # Health warning/danger
-        "SIMPLE_HABIT",         # Easy actionable advice
-        "IF_THEN",              # Conditional relationship
-        "COUNTERINTUITIVE",     # Surprising/unexpected
-        "HUMAN_INTEREST",       # Personal story/case
-        "NEWS_POLICY",          # Policy change/announcement
-    ] = Field(
-        description="Best content archetype for this story"
-    )
-
     support_level: Literal["strong", "moderate", "emerging", "preliminary"] = Field(
-        description="How strong is the evidence supporting this claim?"
-    )
-
-    is_actionable: bool = Field(
-        description="Can regular people act on this information?"
-    )
-
-    lay_audience_relevance: int = Field(
-        ge=1, le=10,
-        description="1-10: How relevant is this to regular people (not medical professionals)? 10 = perfect for Instagram health audience, 1 = only useful for doctors/researchers"
-    )
-
-    actionable_lesson: str = Field(
-        default="",
-        description="For HUMAN_INTEREST stories: What specific action can readers take based on this story? (e.g., 'Get suspicious moles checked early'). Leave empty if not a human interest story."
-    )
-
-    controversy_potential: Literal["high", "moderate", "low", "none"] = Field(
-        default="none",
-        description="For NEWS_POLICY: Does this have viral controversy potential? High = sparks debate (like paid period leave), Moderate = interesting policy, Low = routine announcement, None = not applicable"
+        description="Evidence strength: strong (RCT/meta), moderate (cohort), emerging (single study), preliminary (animal/cell)"
     )
 
     extraction_notes: str = Field(
         default="",
-        description="Any caveats or notes about extraction quality"
+        description="Any caveats about extraction quality"
     )
 
 
 @dataclass
 class NarrativeSpine:
-    """Extracted narrative structure from an article."""
+    """Extracted narrative structure from an article - V3."""
+    # Relevance gate
+    relevant: bool = True
+    rejection_reason: Optional[str] = None
+
+    # Viral primitive
+    primitive: str = "NONE"
+
+    # Core narrative elements
     hook: str = ""
-    key_numbers: list[str] = field(default_factory=list)
-    who_it_applies_to: str = ""
-    time_window: str = ""
-    mechanism_or_why: str = ""
-    real_world_consequence: str = ""
-    standalone_clarity_score: int = 0
+    action: Optional[str] = None
+    outcome: Optional[str] = None
+    numbers: list[str] = field(default_factory=list)
+    time_window: Optional[str] = None
+    who_it_applies_to: Optional[str] = None
+    mechanism_clause: str = ""
+    why_it_matters: str = ""
+
+    # Quality metrics
+    standalone_clarity: int = 0
+    tone: str = "concern"
     emotional_hook: str = "none"
-    content_archetype: str = "STUDY_STAT"
     support_level: str = "moderate"
-    is_actionable: bool = False
-    lay_audience_relevance: int = 5  # NEW: 1-10 score for lay audience
-    actionable_lesson: str = ""  # NEW: For HUMAN_INTEREST stories
-    controversy_potential: str = "none"  # NEW: For NEWS_POLICY stories
     extraction_notes: str = ""
 
-    # Quality gates
+    # Legacy compatibility aliases
+    @property
+    def key_numbers(self) -> list[str]:
+        return self.numbers
+
+    @property
+    def standalone_clarity_score(self) -> int:
+        return self.standalone_clarity
+
+    @property
+    def real_world_consequence(self) -> str:
+        return self.why_it_matters
+
+    @property
+    def mechanism_or_why(self) -> str:
+        return self.mechanism_clause
+
+    @property
+    def content_archetype(self) -> str:
+        """Map primitive to content archetype for backward compatibility."""
+        primitive_to_archetype = {
+            "STUDY_SHOCK_COMPARISON": "STUDY_STAT",
+            "SIMPLE_HACK_PAIN_RELIEF": "SIMPLE_HABIT",
+            "FOOD_SYMPTOM_BENEFIT": "SIMPLE_HABIT",
+            "PARENT_CHILD_BIO": "STUDY_STAT",
+            "AUTHORITY_CLASSIFICATION": "WARNING_RISK",
+            "CULTURE_CONTROVERSY": "NEWS_POLICY",
+            "TIME_REVERSAL": "COUNTERINTUITIVE",
+            "BODY_PART_SPECIFIC": "SIMPLE_HABIT",
+            "NONE": "STUDY_STAT",
+        }
+        return primitive_to_archetype.get(self.primitive, "STUDY_STAT")
+
+    @property
+    def is_actionable(self) -> bool:
+        return self.action is not None and len(self.action) > 0
+
     @property
     def passes_quality_gate(self) -> bool:
         """Check if this spine passes minimum quality requirements."""
-        # Must have clarity score >= 7
-        if self.standalone_clarity_score < 7:
+        if not self.relevant:
             return False
-        # Must have some emotional hook
+        if self.standalone_clarity < 7:
+            return False
         if self.emotional_hook == "none":
             return False
-        # Must have at least one key number for STUDY_STAT
-        if self.content_archetype == "STUDY_STAT" and len(self.key_numbers) == 0:
+        if self.primitive in ("STUDY_SHOCK_COMPARISON", "PARENT_CHILD_BIO") and not self.numbers:
             return False
-        # Must have real-world consequence
-        if not self.real_world_consequence or len(self.real_world_consequence) < 10:
-            return False
-        # Must be relevant to lay audience (not medical professionals)
-        if self.lay_audience_relevance < 6:
-            return False
-        # HUMAN_INTEREST must have actionable lesson
-        if self.content_archetype == "HUMAN_INTEREST" and not self.actionable_lesson:
-            return False
-        # NEWS_POLICY must have some controversy potential to be viral
-        if self.content_archetype == "NEWS_POLICY" and self.controversy_potential in ("none", "low"):
+        if not self.why_it_matters or len(self.why_it_matters) < 10:
             return False
         return True
 
     @property
     def quality_failure_reason(self) -> Optional[str]:
         """Get the reason for quality gate failure."""
-        if self.standalone_clarity_score < 7:
-            return f"standalone_clarity_score too low ({self.standalone_clarity_score})"
+        if not self.relevant:
+            return f"not_relevant: {self.rejection_reason}"
+        if self.standalone_clarity < 7:
+            return f"standalone_clarity too low ({self.standalone_clarity})"
         if self.emotional_hook == "none":
             return "no emotional hook"
-        if self.content_archetype == "STUDY_STAT" and len(self.key_numbers) == 0:
-            return "STUDY_STAT without key numbers"
-        if not self.real_world_consequence or len(self.real_world_consequence) < 10:
-            return "missing real-world consequence"
-        if self.lay_audience_relevance < 6:
-            return f"not_relevant_to_lay_audience ({self.lay_audience_relevance}/10)"
-        if self.content_archetype == "HUMAN_INTEREST" and not self.actionable_lesson:
-            return "human_interest_without_actionable_lesson"
-        if self.content_archetype == "NEWS_POLICY" and self.controversy_potential in ("none", "low"):
-            return f"news_policy_not_viral_enough (controversy: {self.controversy_potential})"
+        if self.primitive in ("STUDY_SHOCK_COMPARISON", "PARENT_CHILD_BIO") and not self.numbers:
+            return f"{self.primitive} without numbers"
+        if not self.why_it_matters or len(self.why_it_matters) < 10:
+            return "missing why_it_matters"
         return None
 
     @property
     def is_actionable_archetype(self) -> bool:
-        """Check if this is an actionable archetype (prioritized)."""
-        return self.content_archetype in ("SIMPLE_HABIT", "WARNING_RISK", "IF_THEN")
+        """Check if this is an actionable primitive."""
+        return self.primitive in (
+            "SIMPLE_HACK_PAIN_RELIEF",
+            "FOOD_SYMPTOM_BENEFIT",
+            "BODY_PART_SPECIFIC",
+        )
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -201,58 +253,65 @@ class NarrativeSpine:
     def from_response(cls, response: NarrativeSpineResponse) -> "NarrativeSpine":
         """Create from Pydantic response."""
         return cls(
+            relevant=response.relevant,
+            rejection_reason=response.rejection_reason,
+            primitive=response.primitive,
             hook=response.hook,
-            key_numbers=response.key_numbers,
-            who_it_applies_to=response.who_it_applies_to,
+            action=response.action,
+            outcome=response.outcome,
+            numbers=response.numbers,
             time_window=response.time_window,
-            mechanism_or_why=response.mechanism_or_why,
-            real_world_consequence=response.real_world_consequence,
-            standalone_clarity_score=response.standalone_clarity_score,
+            who_it_applies_to=response.who_it_applies_to,
+            mechanism_clause=response.mechanism_clause,
+            why_it_matters=response.why_it_matters,
+            standalone_clarity=response.standalone_clarity,
+            tone=response.tone,
             emotional_hook=response.emotional_hook,
-            content_archetype=response.content_archetype,
             support_level=response.support_level,
-            is_actionable=response.is_actionable,
-            lay_audience_relevance=response.lay_audience_relevance,
-            actionable_lesson=response.actionable_lesson,
-            controversy_potential=response.controversy_potential,
             extraction_notes=response.extraction_notes,
         )
 
 
-NARRATIVE_EXTRACTION_PROMPT = """Extract narrative elements for an Instagram health account that gives ACTIONABLE advice.
+NARRATIVE_EXTRACTION_PROMPT = """You are extracting narrative elements for an Instagram health account (@avoidaging / aging.ai).
 
-GOAL: "Do X to ease Y", "Eat X for Y effect", "Avoid X because Y" format content.
-AUDIENCE: Regular people wanting practical health tips, NOT medical professionals.
+TARGET STYLE (from our top-performing posts):
+- "STUDY SAYS EATING ONE EGG A DAY CAN REDUCE YOUR RISK OF STROKE BY 12%"
+- "IF YOU WAKE UP BETWEEN 3-5 AM REGULARLY... YOUR LUNGS MAY BE TRYING TO TELL YOU SOMETHING"
+- "PROCESSED DELI MEATS ARE NOW CLASSIFIED AS GROUP 1 CARCINOGENS BY THE WHO... THE SAME GROUP AS TOBACCO"
+- "WALKING JUST 11 MINUTES A DAY REDUCES YOUR RISK OF EARLY DEATH BY 23%"
 
-EXTRACT:
-1. HOOK: One surprising attention-grabber with numbers. NOT vague like "study examined".
-2. KEY_NUMBERS: All specific stats (%, years, sample sizes, effect sizes).
-3. WHO_IT_APPLIES_TO: Specific population, not "people".
-4. TIME_WINDOW: Duration/timeframe of effect.
-5. MECHANISM_OR_WHY: One sentence on causation.
-6. REAL_WORLD_CONSEQUENCE: Plain language impact on daily life.
-7. STANDALONE_CLARITY_SCORE (1-10): 10=crystal clear to anyone, 1=needs full paper.
-8. EMOTIONAL_HOOK: fear/hope/surprise/validation/curiosity/outrage/none
-9. CONTENT_ARCHETYPE (prioritize actionable):
-   - SIMPLE_HABIT: "Do X to get Y" - PRIORITIZE
-   - WARNING_RISK: "X causes Y bad effect" - PRIORITIZE
-   - IF_THEN: "If X then Y" - PRIORITIZE
-   - STUDY_STAT: Research finding with numbers
-   - COUNTERINTUITIVE: Surprising findings
-   - HUMAN_INTEREST: Personal story (needs actionable_lesson)
-   - NEWS_POLICY: Policy change (needs high controversy_potential)
-10. SUPPORT_LEVEL: strong/moderate/emerging/preliminary
-11. IS_ACTIONABLE: Can regular people act on this?
-    TRUE: eat/avoid something, exercise, change habit
-    FALSE: spending trends, lifestyle observations, medical-pro only, requires Rx
-12. LAY_AUDIENCE_RELEVANCE (1-10): 10=perfect actionable advice, 1=only for doctors.
-    REJECT <6: clinical thresholds, spending trends, diagnostic info.
-13. ACTIONABLE_LESSON: For HUMAN_INTEREST only - what action can readers take? Empty if none.
-14. CONTROVERSY_POTENTIAL: For NEWS_POLICY only - high/moderate/low/none. Reject low/none.
+HARD REJECTS (set relevant=false):
+1. NULL RESULTS: "no effect", "may not work", "not better than placebo", "failed to show"
+2. ADMIN SLUDGE: objectives, stakeholders, frameworks, governance, local authorities, procurement
+3. GENERIC TRUISMS: "exercise is good", "sleep matters", "eat healthy" (unless shocking numbers)
+4. PROMO CONTENT: film premieres, event registrations, documentary releases
+5. SMALL LOCAL PROGRAMS: "150 people joined community walking group"
+6. NICHE SUBGROUPS: content only relevant to rare medical conditions with no broad appeal
+7. DENSE JARGON: technical abbreviations that don't translate to Instagram slides
 
-REJECT: spending habits, lifestyle trends, medical-pro content, product recalls, geographic-specific advice.
+VIRAL PRIMITIVES (choose the best fit):
+- STUDY_SHOCK_COMPARISON: Study + shocking number/comparison ("equivalent to smoking X cigarettes")
+- SIMPLE_HACK_PAIN_RELIEF: Small physical action → symptom relief ("roll tennis ball under foot")
+- FOOD_SYMPTOM_BENEFIT: Specific food → health benefit ("eating walnuts reduces inflammation")
+- PARENT_CHILD_BIO: Baby/parent content + biological markers + numbers
+- AUTHORITY_CLASSIFICATION: WHO/FDA/IARC classification + dramatic comparison
+- CULTURE_CONTROVERSY: Health-relevant controversy (verifiable, not pure politics)
+- TIME_REVERSAL: Age reversal, longevity, "add X years to your life"
+- BODY_PART_SPECIFIC: Specific body part + improvement/risk
+- NONE: No clear viral primitive (likely reject)
 
-ARTICLE:
+EXTRACTION RULES:
+1. hook: Plain English, 1-2 sentences, must be attention-grabbing
+2. action: What can people DO? (eat X, avoid Y, walk for Z minutes) - null if not actionable
+3. outcome: The result/benefit/risk
+4. numbers: ONLY numbers explicitly stated in text - do not infer
+5. time_window: Duration mentioned (weeks, months, years)
+6. mechanism_clause: Brief causation - MUST BE 12 WORDS OR FEWER
+7. why_it_matters: One sentence, plain language impact
+8. standalone_clarity: Would someone understand this without reading the article? (0-10)
+9. tone: shock (alarming finding), awe (amazing discovery), concern (warning), warmth (heartwarming), humor (surprising/funny)
+
+ARTICLE TO ANALYZE:
 """
 
 
